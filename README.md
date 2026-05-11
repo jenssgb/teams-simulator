@@ -32,45 +32,59 @@ audio frame-accurately into `CABLE Input`, samples the RMS level, and
 draws an equalizer-style waveform overlay onto the avatar image so Teams
 participants see "the avatar is talking now".
 
-## Quickstart (fresh Windows 10/11 VM)
+## Quickstart — one paste, walk away
+
+On a fresh **Windows 10/11 VM**, open PowerShell **as Administrator** and paste:
 
 ```powershell
-# 1. Get the code
-git clone <repo-url> C:\teams-simulator
-cd C:\teams-simulator
-
-# 2. Bootstrap the VM (elevated PowerShell)
-
-# Option A - fully unattended (auto-reboot, scheduled task continues setup):
-powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -Auto
-
-# Option B - interactive:
-powershell -ExecutionPolicy Bypass -File .\setup\install.ps1
-#   -> Installs Python 3.11 (winget) + ffmpeg + VB-Audio Virtual Cable
-#      + OBS Studio (winget, registers DirectShow filter) + .venv + deps
-#   -> Asks at the end whether to reboot (VB-Cable is a kernel driver).
-
-# Optional - dry run (no admin needed, modifies nothing, prints the plan):
-powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -DryRun
-
-# 3. After reboot: verify the wiring
-powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
-
-# 4. In Teams (or Teams Web in Edge):
-#    Settings -> Devices ->
-#       Microphone : "CABLE Output (VB-Audio Virtual Cable)"
-#       Camera     : "OBS Virtual Camera"
-
-# 5. Launch the GUI
-.\.venv\Scripts\python.exe -m teams_simulator
+iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
 ```
 
-> **One-paste lazy mode** on a fresh Windows 10/11 VM, elevated PowerShell:
-> ```powershell
-> iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
-> ```
-> clones the repo to `C:\teams-simulator` and runs `install.ps1 -Auto`.
->
+That one line:
+
+1. installs `git` via winget if needed,
+2. clones this repo to `C:\teams-simulator`,
+3. runs `setup\install.ps1 -Auto` — installs Python 3.11, ffmpeg, **VB-Audio Virtual Cable**, **OBS Studio** (registers the Virtual Camera DirectShow filter), creates `.venv`, pip-installs everything,
+4. registers a one-shot scheduled task `TeamsSimulatorSetupResume` and **reboots automatically** (VB-Cable is a kernel driver),
+5. on the next logon the task wakes up, finishes the install, runs `verify.ps1` which prints a green **READY** banner with the exact device names to pick, and unregisters itself.
+
+Then in **Teams → Settings → Devices** pick:
+
+| | |
+| --- | --- |
+| **Microphone** | `CABLE Output (VB-Audio Virtual Cable)` |
+| **Camera** | `OBS Virtual Camera` |
+
+…and start the simulator:
+
+```powershell
+C:\teams-simulator\.venv\Scripts\python.exe -m teams_simulator
+```
+
+A small Tkinter window opens with the bundled `samples\demo_audio.wav` +
+`samples\demo_avatar.png` already wired up. Hit **▶ Start** and you are
+"in the meeting".
+
+### Manual / offline alternative
+
+If you can't (or don't want to) reach raw.githubusercontent.com from
+the VM, do the same thing by hand:
+
+```powershell
+# 1. copy the repo onto the VM (git clone, scp, ZIP, ...) and cd into it
+git clone https://github.com/jenssgb/teams-simulator.git C:\teams-simulator
+cd C:\teams-simulator
+
+# 2. one of:
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -Auto      # unattended + auto-reboot
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1            # interactive, asks before reboot
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -DryRun    # plan only, no admin needed
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -NoReboot  # exit code 2 if reboot would be required
+
+# 3. after reboot
+powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
+.\.venv\Scripts\python.exe -m teams_simulator
+```
 
 ## Using the simulator
 
