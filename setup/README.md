@@ -104,7 +104,7 @@ One-paste installer for the truly lazy operator. Designed to be served
 via a one-liner like:
 
 ```powershell
-iex (irm 'https://raw.githubusercontent.com/<owner>/teams-simulator/main/setup/bootstrap.ps1')
+iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
 ```
 
 It installs git via winget if needed, clones the repo to

@@ -65,8 +65,10 @@ powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
 .\.venv\Scripts\python.exe -m teams_simulator
 ```
 
-> **One-paste lazy mode** (after you publish the repo):
-> `iex (irm 'https://raw.githubusercontent.com/<owner>/teams-simulator/main/setup/bootstrap.ps1')`
+> **One-paste lazy mode** on a fresh Windows 10/11 VM, elevated PowerShell:
+> ```powershell
+> iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
+> ```
 > clones the repo to `C:\teams-simulator` and runs `install.ps1 -Auto`.
 >
 

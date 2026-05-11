@@ -23,7 +23,7 @@
 
 .EXAMPLE
     # Fresh Win11 VM, elevated PowerShell, one paste:
-    iex (irm 'https://raw.githubusercontent.com/<owner>/teams-simulator/main/setup/bootstrap.ps1')
+    iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
 
 .EXAMPLE
     # Custom location and interactive install:
@@ -31,7 +31,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoUrl     = 'https://github.com/CHANGE-ME/teams-simulator.git',
+    [string]$RepoUrl     = 'https://github.com/jenssgb/teams-simulator.git',
     [string]$TargetDir   = 'C:\teams-simulator',
     [string]$InstallArgs = '-Auto'
 )
