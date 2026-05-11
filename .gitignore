@@ -46,6 +46,7 @@ $RECYCLE.BIN/
 # --- Project-specific ---
 # Downloaded installers (cached by setup/install.ps1)
 setup/_downloads/
+setup/_logs/
 # User-supplied media (don't commit user audio/avatar files)
 user_media/
 *.user.wav
