@@ -57,13 +57,45 @@ A small Tkinter window opens, pre-wired with the bundled `samples\demo_audio.wav
 
 ---
 
-## 🧩 How it works
+## 🧑‍🎨 Bundled avatars
+
+Five photoreal hipsters ship in `samples/avatars/`. Pick one from the
+**Avatar** dropdown in the GUI — your choice is instantly previewed and
+wired into the camera stream. Bring your own audio.
 
 <div align="center">
 
-<img src="assets/architecture.png" alt="Architecture: audio + image → Teams Simulator → CABLE Output + OBS Virtual Camera" width="100%" />
+<table>
+<tr>
+<td align="center"><img src="samples/avatars/atlas.png" width="160" /><br /><sub><b>Atlas</b></sub></td>
+<td align="center"><img src="samples/avatars/wren.png" width="160" /><br /><sub><b>Wren</b></sub></td>
+<td align="center"><img src="samples/avatars/cosmo.png" width="160" /><br /><sub><b>Cosmo</b></sub></td>
+<td align="center"><img src="samples/avatars/maeve.png" width="160" /><br /><sub><b>Maeve</b></sub></td>
+<td align="center"><img src="samples/avatars/jasper.png" width="160" /><br /><sub><b>Jasper</b></sub></td>
+</tr>
+</table>
+
+<sub>Generated with Flux via <a href="https://pollinations.ai">Pollinations.ai</a> · regenerate any time with <code>python scripts/generate_avatars.py</code></sub>
 
 </div>
+
+Want a different cast? Edit the prompt list in
+[`scripts/generate_avatars.py`](scripts/generate_avatars.py), re-run it,
+and the dropdown picks the new lineup up automatically — it's
+manifest-driven (`samples/avatars/avatars.json`).
+
+---
+
+## 🧩 How it works
+
+```
+your_audio.wav  ──►  sounddevice    ──►  "CABLE Input"   ──►  Teams mic
+                                          (VB-Audio Virtual Cable)
+
+avatar.png      ──►  pyvirtualcam   ──►  "OBS Virtual Camera"  ──►  Teams cam
+   + waveform                              (DirectShow filter)
+   overlay
+```
 
 Two virtual Windows devices do the heavy lifting:
 
@@ -155,13 +187,15 @@ teams-simulator/
 ├── samples/
 │   ├── demo_audio.wav           <- 6 s synthesised speech-like signal
 │   ├── demo_avatar.png          <- 1280x720 placeholder portrait
+│   ├── avatars/                 <- 5 bundled hipster avatars + manifest
+│   │   ├── atlas.png · wren.png · cosmo.png · maeve.png · jasper.png
+│   │   └── avatars.json
 │   └── README.md
 ├── assets/
-│   ├── hero.png                 <- README banner
-│   └── architecture.png         <- README "How it works" diagram
+│   └── hero.png                 <- README banner (AI generated, regenerable)
 ├── scripts/
 │   ├── generate_samples.py      <- regenerates the bundled samples
-│   └── generate_hero.py         <- regenerates assets/*.png
+│   └── generate_avatars.py      <- regenerates avatars + hero via Pollinations.ai (Flux)
 ├── src/teams_simulator/
 │   ├── __main__.py              <- python -m teams_simulator -> GUI
 │   ├── ui.py                    <- Tkinter window

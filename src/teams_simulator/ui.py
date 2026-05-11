@@ -27,6 +27,7 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Optional
 
+from .avatars import BundledAvatar, default_bundled_avatar, list_bundled_avatars
 from .config import DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH
 from .devices import (
     CABLE_OUTPUT_NAME,
@@ -44,6 +45,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SAMPLES_DIR = REPO_ROOT / "samples"
 DEMO_AUDIO = SAMPLES_DIR / "demo_audio.wav"
 DEMO_IMAGE = SAMPLES_DIR / "demo_avatar.png"
+
+# Preview thumbnail size for the avatar dropdown (square, kept small so
+# the window doesn't grow much).
+PREVIEW_SIZE = 96
 
 
 class _TkLogHandler(logging.Handler):
@@ -66,18 +71,35 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Teams Simulator")
-        root.geometry("680x540")
-        root.minsize(620, 480)
+        root.geometry("760x620")
+        root.minsize(700, 540)
 
         # State -----------------------------------------------------------
         self.controller: Optional[SimulatorController] = None
         self.audio_path = tk.StringVar(value=str(DEMO_AUDIO) if DEMO_AUDIO.exists() else "")
-        self.image_path = tk.StringVar(value=str(DEMO_IMAGE) if DEMO_IMAGE.exists() else "")
+
+        # Discover bundled avatars first so we can pre-select one as the
+        # default image source.
+        self._avatars: tuple[BundledAvatar, ...] = list_bundled_avatars()
+        default_av = default_bundled_avatar()
+        default_image = (
+            str(default_av.path) if default_av is not None
+            else (str(DEMO_IMAGE) if DEMO_IMAGE.exists() else "")
+        )
+
+        self.image_path = tk.StringVar(value=default_image)
+        self.avatar_var = tk.StringVar(
+            value=default_av.label if default_av is not None else ""
+        )
         self.loop_var = tk.BooleanVar(value=True)
         self.fps_var = tk.IntVar(value=DEFAULT_VIDEO_FPS)
         self.status_text = tk.StringVar(value="Idle")
         self.audio_level = tk.DoubleVar(value=0.0)
         self.position_text = tk.StringVar(value="00:00 / 00:00")
+
+        # Cache for PhotoImage thumbnails so they're not garbage-collected.
+        self._preview_cache: dict[str, tk.PhotoImage] = {}
+        self._preview_image: tk.PhotoImage | None = None
 
         self.log_queue: queue.Queue[str] = queue.Queue(maxsize=500)
         self._setup_logging()
@@ -114,9 +136,19 @@ class App:
         files_frame = ttk.LabelFrame(self.root, text="Inputs")
         files_frame.pack(fill="x", **pad)
 
-        self._build_file_row(files_frame, 0, "Audio file:", self.audio_path,
+        # Avatar dropdown + preview. Only built when there is at least one
+        # bundled avatar — otherwise the panel collapses cleanly.
+        if self._avatars:
+            self._build_avatar_row(files_frame, row=0)
+            audio_row = 1
+            file_row = 2
+        else:
+            audio_row = 0
+            file_row = 1
+
+        self._build_file_row(files_frame, audio_row, "Audio file:", self.audio_path,
                              ("Audio", "*.wav *.flac *.ogg *.mp3 *.aiff"))
-        self._build_file_row(files_frame, 1, "Avatar image:", self.image_path,
+        self._build_file_row(files_frame, file_row, "Custom image:", self.image_path,
                              ("Image", "*.png *.jpg *.jpeg *.bmp"))
 
         # Options panel ----------------------------------------------------
@@ -164,6 +196,60 @@ class App:
         self.log_text.pack(fill="both", expand=True)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build_avatar_row(self, parent: ttk.LabelFrame, row: int) -> None:
+        ttk.Label(parent, text="Avatar:").grid(row=row, column=0, padx=8, pady=4, sticky="ne")
+
+        labels = [a.label for a in self._avatars]
+        combo = ttk.Combobox(parent, textvariable=self.avatar_var,
+                             values=labels, state="readonly", width=20)
+        combo.grid(row=row, column=1, padx=4, pady=4, sticky="w")
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._on_avatar_selected())
+
+        # Preview label spans the same column as the file rows below so
+        # it lines up nicely.
+        self.avatar_preview = ttk.Label(parent, borderwidth=1, relief="solid",
+                                        anchor="center")
+        self.avatar_preview.grid(row=row, column=2, rowspan=1, padx=8, pady=4,
+                                 sticky="e")
+
+        parent.columnconfigure(1, weight=1)
+        # Make sure there's a sensible initial selection.
+        if self._avatars and not self.avatar_var.get():
+            self.avatar_var.set(self._avatars[0].label)
+        self._on_avatar_selected()
+
+    def _on_avatar_selected(self) -> None:
+        label = self.avatar_var.get()
+        match = next((a for a in self._avatars if a.label == label), None)
+        if match is None:
+            return
+        self.image_path.set(str(match.path))
+        self._show_preview(match)
+
+    def _show_preview(self, avatar: BundledAvatar) -> None:
+        cached = self._preview_cache.get(avatar.id)
+        if cached is None:
+            try:
+                cached = self._make_preview(avatar.path)
+            except tk.TclError as exc:
+                log.warning("could not load preview for %s: %s", avatar.id, exc)
+                self.avatar_preview.configure(image="", text=avatar.label,
+                                              width=12)
+                return
+            self._preview_cache[avatar.id] = cached
+        self._preview_image = cached
+        self.avatar_preview.configure(image=cached, text="")
+
+    def _make_preview(self, path: Path) -> tk.PhotoImage:
+        # Tk's built-in PhotoImage handles PNG natively (Tk 8.6+) but
+        # has no resize — we use ``subsample`` for a quick downscale.
+        img = tk.PhotoImage(file=str(path))
+        # Source is 1024x1024; we want ~PREVIEW_SIZE.
+        factor = max(1, img.width() // PREVIEW_SIZE)
+        if factor > 1:
+            img = img.subsample(factor, factor)
+        return img
 
     def _build_file_row(
         self, parent: ttk.LabelFrame, row: int, label: str,

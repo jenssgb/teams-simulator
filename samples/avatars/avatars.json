@@ -1,0 +1,27 @@
+[
+  {
+    "id": "atlas",
+    "label": "Atlas",
+    "file": "samples/avatars/atlas.png"
+  },
+  {
+    "id": "wren",
+    "label": "Wren",
+    "file": "samples/avatars/wren.png"
+  },
+  {
+    "id": "cosmo",
+    "label": "Cosmo",
+    "file": "samples/avatars/cosmo.png"
+  },
+  {
+    "id": "maeve",
+    "label": "Maeve",
+    "file": "samples/avatars/maeve.png"
+  },
+  {
+    "id": "jasper",
+    "label": "Jasper",
+    "file": "samples/avatars/jasper.png"
+  }
+]
