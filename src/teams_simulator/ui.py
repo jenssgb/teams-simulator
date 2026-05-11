@@ -124,12 +124,17 @@ class App:
         self.dev_cam_label.pack(anchor="w", padx=8, pady=2)
         self.dev_hint_label = ttk.Label(
             dev_frame,
-            text="If a device is missing, run setup\\install.ps1 (as Administrator).",
+            text="If a device is missing, run setup\\install.ps1 (as Administrator), or click Diagnostics for details.",
             foreground="gray",
         )
         self.dev_hint_label.pack(anchor="w", padx=8, pady=(0, 4))
-        ttk.Button(dev_frame, text="Re-check", command=self._refresh_device_status).pack(
-            anchor="e", padx=8, pady=4
+        button_row = ttk.Frame(dev_frame)
+        button_row.pack(anchor="e", padx=8, pady=4)
+        ttk.Button(button_row, text="🩺 Diagnostics", command=self._run_diagnostics).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(button_row, text="Re-check", command=self._refresh_device_status).pack(
+            side="left"
         )
 
         # Files panel ------------------------------------------------------
@@ -333,6 +338,33 @@ class App:
     def _apply_device_status(self, mic_ok: bool, mic_msg: str, cam_ok: bool, cam_msg: str) -> None:
         self.dev_mic_label.config(text="🎤 " + mic_msg, foreground=("dark green" if mic_ok else "red"))
         self.dev_cam_label.config(text="📷 " + cam_msg, foreground=("dark green" if cam_ok else "red"))
+
+    def _run_diagnostics(self) -> None:
+        # Spawn setup\diagnose.ps1 in a NEW PowerShell window. It writes
+        # a full report to setup\_logs\diagnose-*.txt AND copies it to
+        # the clipboard, so the user can just paste back to support.
+        import subprocess
+
+        repo_root = Path(__file__).resolve().parents[2]
+        diag = repo_root / "setup" / "diagnose.ps1"
+        if not diag.exists():
+            self._append_log("ERROR  diagnose.ps1 not found - re-run installer to update")
+            return
+        self._append_log(f"INFO   running diagnostics: {diag}")
+        try:
+            subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", str(diag),
+                ],
+                cwd=str(repo_root),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+            self._append_log("INFO   a new console will pop up; the report is also copied to your clipboard.")
+        except Exception as exc:
+            self._append_log(f"ERROR  could not start diagnostics: {exc}")
 
     # ------------------------------------------------------------------
     # Controls
