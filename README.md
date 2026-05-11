@@ -112,23 +112,37 @@ or change the scripts/voices any time:
 .venv\Scripts\python.exe scripts\generate_speech_samples.py
 ```
 
-### Long — for transcript-grade testing (downloaded on demand, ~73 MB)
+### Long — for transcript-grade testing (downloaded/generated on demand, ~77 MB)
 
-Three classic public-domain audiobook chapters from **LibriVox**, single
-narrator, 30-65 minutes each — long enough to actually exercise the Teams
-transcript / live-captions pipeline.
+Two flavours of long, single-narrator English monologues, both relevant
+to the Teams transcript / live-captions pipeline:
 
-| # | Title | Author | Reader | Length |
-|---|-------|--------|--------|--------|
-| 1 | A Scandal in Bohemia | A. Conan Doyle | LibriVox vol. | ~65 min |
-| 2 | The Red-Headed League | A. Conan Doyle | LibriVox vol. | ~59 min |
-| 3 | Walden — "Economy" pt. 1 | H. D. Thoreau | LibriVox vol. | ~30 min |
+**📊 Modern business monologues** (~4 MB, generated locally with Edge-TTS):
 
-The Windows installer downloads them automatically into
-`samples/long/` (gitignored, not in the repo). Skipped silently if you're
-offline — the GUI just shows fewer entries. Manual re-download:
+| # | Title | Voice | Length |
+|---|-------|-------|--------|
+| 1 | AI in software engineering, 2026 edition | Aria (US, female) | ~13 min |
+| 2 | Cloud architecture lessons from a decade in distributed systems | Ryan (UK, male) | ~13 min |
+
+These give your transcript test something that actually sounds like a
+modern engineering all-hands — vocabulary like *agent*, *telemetry*,
+*platform*, *SLO*, *blast radius*, *idempotency*, etc. Topics are
+deliberately neutral (engineering practice, not policy or politics).
+
+**🎙️ Classic public-domain audiobook chapters** (~73 MB, downloaded from LibriVox):
+
+| # | Title | Author | Length |
+|---|-------|--------|--------|
+| 1 | A Scandal in Bohemia | A. Conan Doyle | ~65 min |
+| 2 | The Red-Headed League | A. Conan Doyle | ~59 min |
+| 3 | Walden — "Economy" pt. 1 | H. D. Thoreau | ~30 min |
+
+The Windows installer fetches/generates them automatically into
+`samples/long/` (gitignored, not in the repo). Skipped silently if
+you're offline — the GUI just shows fewer entries. Manual re-run any time:
 
 ```powershell
+.venv\Scripts\python.exe scripts\generate_business_long_samples.py
 .venv\Scripts\python.exe scripts\download_long_samples.py
 ```
 

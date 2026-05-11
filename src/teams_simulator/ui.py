@@ -78,20 +78,19 @@ class App:
         self.controller: Optional[SimulatorController] = None
         # Bundled English speech samples for one-click testing.
         self._speech_samples: list[tuple[str, Path]] = self._discover_speech_samples()
-        # Default to the FIRST long sample if any have been downloaded
-        # (they're better for transcript testing); otherwise fall back to
-        # the first short sample, otherwise the legacy demo_audio.wav.
+        # Default to the FIRST modern business monologue if any have been
+        # generated (most relevant for transcript testing); else the first
+        # LibriVox classic; else the first short clip; else legacy demo.wav.
         default_audio: str
         default_label: str = ""
-        long_default = next(
-            ((label, path) for label, path in self._speech_samples
-             if "long" in label.lower()), None,
-        )
-        if long_default is not None:
-            default_label, default_path = long_default
-            default_audio = str(default_path)
-        elif self._speech_samples:
-            default_label, default_path = self._speech_samples[0]
+        def _pick(prefix: str) -> tuple[str, Path] | None:
+            for label, path in self._speech_samples:
+                if label.startswith(prefix):
+                    return label, path
+            return None
+        chosen = _pick("📊 business") or _pick("🎙️ classic") or _pick("📢 short")
+        if chosen is not None:
+            default_label, default_path = chosen
             default_audio = str(default_path)
         elif DEMO_AUDIO.exists():
             default_audio = str(DEMO_AUDIO)
@@ -313,16 +312,17 @@ class App:
     def _discover_speech_samples() -> list[tuple[str, Path]]:
         """Return ``[(label, path), ...]`` for every bundled English sample.
 
-        Looks for two things in ``samples/``:
+        Looks for three things in ``samples/``:
 
         1. Short bundled MP3s (``samples/sample_*.mp3``) - committed to git.
-        2. Long PD audiobooks (``samples/long/*.mp3``) - downloaded on
-           demand by ``scripts/download_long_samples.py``. If the manifest
-           ``samples/long/long_samples.json`` is present, its labels are
-           preferred; otherwise the filename stem is humanised.
+        2. Modern business-context monologues (``samples/long/business_*.mp3``)
+           generated locally via Edge-TTS by the installer. Manifest:
+           ``samples/long/business_samples.json``.
+        3. Long PD audiobooks (``samples/long/*.mp3``) downloaded on demand.
+           Manifest: ``samples/long/long_samples.json``.
 
-        Long samples are listed BELOW the short ones so that a fresh user
-        sees the quick verification clip first.
+        Order in the dropdown: short (verification), then business
+        (modern, transcript-relevant), then classics (Holmes / Walden).
         """
         out: list[tuple[str, Path]] = []
         if not SAMPLES_DIR.exists():
@@ -338,25 +338,44 @@ class App:
             out.append((f"📢 short · {label}", path))
 
         long_dir = SAMPLES_DIR / "long"
-        manifest_path = long_dir / "long_samples.json"
-        manifest_labels: dict[str, str] = {}
-        if manifest_path.exists():
+        if not long_dir.exists():
+            return out
+
+        def _load_manifest(name: str) -> dict[str, str]:
+            path = long_dir / name
+            if not path.exists():
+                return {}
             try:
                 import json
-                entries = json.loads(manifest_path.read_text(encoding="utf-8"))
-                for entry in entries:
-                    if isinstance(entry, dict) and entry.get("file") and entry.get("label"):
-                        manifest_labels[str(entry["file"])] = str(entry["label"])
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                return {
+                    str(e["file"]): str(e["label"])
+                    for e in entries
+                    if isinstance(e, dict) and e.get("file") and e.get("label")
+                }
             except (ValueError, OSError):
-                pass
+                return {}
 
-        if long_dir.exists():
-            for path in sorted(long_dir.glob("*.mp3")):
-                label = manifest_labels.get(
-                    path.name,
-                    path.stem.replace("_", " ").title(),
-                )
-                out.append((f"🎙️ long · {label}", path))
+        business_labels = _load_manifest("business_samples.json")
+        long_labels = _load_manifest("long_samples.json")
+
+        # Business / modern monologues first (more useful for transcript testing).
+        for path in sorted(long_dir.glob("business_*.mp3")):
+            label = business_labels.get(
+                path.name,
+                path.stem.replace("_", " ").title(),
+            )
+            out.append((f"📊 business · {label}", path))
+
+        # LibriVox classics last.
+        for path in sorted(long_dir.glob("*.mp3")):
+            if path.name.startswith("business_"):
+                continue
+            label = long_labels.get(
+                path.name,
+                path.stem.replace("_", " ").title(),
+            )
+            out.append((f"🎙️ classic · {label}", path))
 
         return out
 

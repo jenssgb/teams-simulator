@@ -149,7 +149,9 @@ if ($venvOk) {
             throw "no long monologue downloads in $longDir - run scripts\download_long_samples.py for transcript-grade test material"
         }
         $totalMB = [math]::Round((($files | Measure-Object Length -Sum).Sum / 1MB), 1)
-        return ("$($files.Count) long samples ($totalMB MB total)")
+        $business = ($files | Where-Object { $_.Name -like 'business_*' }).Count
+        $classic  = ($files | Where-Object { $_.Name -notlike 'business_*' }).Count
+        return ("$($files.Count) long samples ($business business + $classic classic, $totalMB MB total)")
     } | Out-Null
 
     Check "Desktop shortcut 'Teams Simulator' present" {

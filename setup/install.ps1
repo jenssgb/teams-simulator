@@ -627,6 +627,37 @@ function Get-LongSpeechSamples {
 }
 
 # ---------------------------------------------------------------------------
+# Modern business-context monologues (~4 MB, generated on demand via Edge-TTS)
+# ---------------------------------------------------------------------------
+function New-BusinessSpeechSamples {
+    Write-Step 'generating modern business-context monologues (~4 MB - Edge-TTS)'
+
+    $script = Join-Path $RepoRoot 'scripts\generate_business_long_samples.py'
+    if (-not (Test-Path $script)) {
+        Write-Warn2 "scripts\generate_business_long_samples.py missing - skipping"
+        return
+    }
+    $py = Join-Path $VenvPath 'Scripts\python.exe'
+    if (-not (Test-Path $py)) {
+        Write-Warn2 "venv python not found - skipping business-sample generation"
+        return
+    }
+    if ($script:DryRun) {
+        Write-Dry "would run: $py $script"
+        return
+    }
+
+    Invoke-Action "python scripts\generate_business_long_samples.py" {
+        & $py $script
+        # Non-fatal: needs Edge-TTS endpoint, may fail offline. The GUI
+        # just shows fewer entries.
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn2 "generate_business_long_samples.py exited $LASTEXITCODE (non-fatal)"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Resume-after-reboot scheduling
 # ---------------------------------------------------------------------------
 function Register-ResumeTask {
@@ -818,6 +849,7 @@ if ($ContinueAfterReboot) {
         Update-SessionPath
         Install-PythonDeps
         Get-LongSpeechSamples
+        New-BusinessSpeechSamples
         Restart-AudioStack
         Invoke-Verify
         New-AppShortcuts
@@ -877,6 +909,7 @@ if ($script:RebootRequired) {
 } else {
     Install-PythonDeps
     Get-LongSpeechSamples
+    New-BusinessSpeechSamples
     Restart-AudioStack
     Invoke-Verify
     New-AppShortcuts
