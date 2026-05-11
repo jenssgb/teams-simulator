@@ -101,6 +101,18 @@ if ($venvOk) {
         return "version $ver"
     } | Out-Null
 
+    Check "bundled avatars present (samples\avatars)" {
+        $manifest = Join-Path $RepoRoot 'samples\avatars\avatars.json'
+        if (-not (Test-Path $manifest)) { throw "manifest missing - re-clone the repo" }
+        $entries = Get-Content $manifest -Raw | ConvertFrom-Json
+        if (-not $entries -or $entries.Count -lt 1) { throw "manifest empty" }
+        foreach ($e in $entries) {
+            $p = Join-Path $RepoRoot $e.file
+            if (-not (Test-Path $p)) { throw "avatar file missing: $($e.file)" }
+        }
+        return ("$($entries.Count) avatars: " + (($entries | ForEach-Object { $_.label }) -join ', '))
+    } | Out-Null
+
     Check "VB-Cable 'CABLE Input' visible (used as audio sink)" {
         $name = & $VenvPy -c "from teams_simulator.devices import find_cable_input; print(find_cable_input())" 2>&1
         if ($LASTEXITCODE -ne 0) {
