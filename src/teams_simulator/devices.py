@@ -1,12 +1,21 @@
 """Discover the virtual audio and video devices required by the simulator.
 
 The simulator routes audio into VB-Audio Virtual Cable's playback endpoint
-("CABLE Input") so that Microsoft Teams sees the matching capture endpoint
-("CABLE Output") as a microphone, and pushes video frames to the OBS Virtual
-Camera DirectShow filter so that Teams sees it as a webcam.
+so that Microsoft Teams sees the matching capture endpoint as a microphone,
+and pushes video frames to the OBS Virtual Camera DirectShow filter so that
+Teams sees it as a webcam.
 
 This module locates those devices and provides helpful errors if the user
 hasn't run ``setup\\install.ps1`` yet.
+
+Naming is normalised across two VB-Cable releases:
+
+* Driver Pack 43 and earlier — "CABLE Input (VB-Audio Virtual Cable)" /
+  "CABLE Output (VB-Audio Virtual Cable)".
+* Driver Pack 45 (Oct 2024) — "Output (VB-Audio Point)" /
+  "CABLE Output (VB-Audio Point)" / "Input (VB-Audio Point)".
+
+We accept any device name containing one of the VB-Audio markers below.
 """
 
 from __future__ import annotations
@@ -17,7 +26,8 @@ from typing import Optional
 import sounddevice as sd
 
 # Substring used to identify the VB-Cable playback device. The full Windows
-# name is something like "CABLE Input (VB-Audio Virtual Cable)".
+# name is something like "CABLE Input (VB-Audio Virtual Cable)" on the older
+# Driver Pack 43, or "Output (VB-Audio Point)" on Driver Pack 45.
 CABLE_INPUT_NAME = "CABLE Input"
 
 # Substring used to identify the matching capture endpoint (what Teams hears
@@ -26,6 +36,16 @@ CABLE_OUTPUT_NAME = "CABLE Output"
 
 # Display name registered by OBS Studio's built-in Virtual Camera.
 OBS_VIRTUAL_CAMERA_NAME = "OBS Virtual Camera"
+
+# Markers that identify a VB-Audio Virtual Cable device regardless of which
+# Driver Pack version installed it. Matching is case-insensitive.
+_VBAUDIO_MARKERS = (
+    "vb-audio",         # "VB-Audio Virtual Cable" / "VB-Audio Point"
+    "vb-cable",         # rare, some translations
+    "vbaudio",          # WDM-KS sometimes drops the dash
+    "cable input",      # legacy, Driver Pack 43
+    "cable output",     # legacy, Driver Pack 43
+)
 
 INSTALL_HINT = (
     "Run setup\\install.ps1 (as Administrator) to install VB-Audio Virtual "
@@ -66,36 +86,79 @@ def list_audio_devices() -> list[AudioDevice]:
     return devices
 
 
+def _is_vbaudio(name: str) -> bool:
+    n = name.lower()
+    return any(marker in n for marker in _VBAUDIO_MARKERS)
+
+
+def _score_playback_candidate(dev: AudioDevice) -> int:
+    """Higher = better fit for 'where do we WRITE audio to?'."""
+    n = dev.name.lower()
+    score = 0
+    if "cable input" in n:        # legacy DP43 - the canonical name
+        score += 100
+    elif "output (vb-audio" in n:  # DP45 - playback endpoint
+        score += 80
+    elif "vb-audio" in n or "vbaudio" in n:
+        score += 40
+    # Prefer fewer channels first - the legacy 2ch endpoint is what Teams
+    # normally pairs with. The newer 16ch endpoint also works but Teams
+    # may negotiate a different sample format.
+    score += max(0, 16 - dev.max_output_channels)
+    return score
+
+
+def _score_capture_candidate(dev: AudioDevice) -> int:
+    """Higher = better fit for 'what should the user pick as MIC in Teams?'."""
+    n = dev.name.lower()
+    score = 0
+    if "cable output" in n:       # both DP43 and DP45 expose this
+        score += 100
+    elif "input (vb-audio" in n:  # DP45 generic input endpoint
+        score += 60
+    elif "vb-audio" in n or "vbaudio" in n:
+        score += 40
+    score += max(0, 16 - dev.max_input_channels)
+    return score
+
+
 def find_cable_input(devices: Optional[list[AudioDevice]] = None) -> AudioDevice:
     """Locate the VB-Cable playback endpoint we write audio to.
 
+    Matches both Driver Pack 43 (``CABLE Input (VB-Audio Virtual Cable)``)
+    and Driver Pack 45 (``Output (VB-Audio Point)``).
+
     Raises:
-        DeviceNotFoundError: if VB-Cable is not installed (or under a
-            different name than ``CABLE Input``).
+        DeviceNotFoundError: if no VB-Audio playback device exists.
     """
     if devices is None:
         devices = list_audio_devices()
-    for dev in devices:
-        if CABLE_INPUT_NAME.lower() in dev.name.lower() and dev.is_output:
-            return dev
-    raise DeviceNotFoundError(
-        f"Virtual microphone playback device '{CABLE_INPUT_NAME}' not found.\n"
-        f"{INSTALL_HINT}"
-    )
+    candidates = [d for d in devices if d.is_output and _is_vbaudio(d.name)]
+    if not candidates:
+        raise DeviceNotFoundError(
+            f"Virtual microphone playback device '{CABLE_INPUT_NAME}' not found.\n"
+            f"{INSTALL_HINT}"
+        )
+    candidates.sort(key=_score_playback_candidate, reverse=True)
+    return candidates[0]
 
 
 def find_cable_output(devices: Optional[list[AudioDevice]] = None) -> Optional[AudioDevice]:
     """Locate the matching capture endpoint Teams should pick as its mic.
+
+    Matches both Driver Pack 43 (``CABLE Output (VB-Audio Virtual Cable)``)
+    and Driver Pack 45 (``CABLE Output (VB-Audio Point)``).
 
     Returns ``None`` rather than raising — this is informational only, used
     by the verify script and the UI to display "Teams should select: …".
     """
     if devices is None:
         devices = list_audio_devices()
-    for dev in devices:
-        if CABLE_OUTPUT_NAME.lower() in dev.name.lower() and dev.max_input_channels > 0:
-            return dev
-    return None
+    candidates = [d for d in devices if d.max_input_channels > 0 and _is_vbaudio(d.name)]
+    if not candidates:
+        return None
+    candidates.sort(key=_score_capture_candidate, reverse=True)
+    return candidates[0]
 
 
 def check_obs_virtual_camera() -> str:

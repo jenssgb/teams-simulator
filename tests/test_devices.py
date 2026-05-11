@@ -28,6 +28,29 @@ FAKE_DEVICES_NO_CABLE = [
 ]
 
 
+# Real device list reported by VB-Cable Driver Pack 45 (Oct 2024). The legacy
+# "CABLE Input" / "CABLE Output" names became "Output (VB-Audio Point)" and
+# "CABLE Output (VB-Audio Point)" — capture this so we don't regress.
+FAKE_DEVICES_DRIVER_PACK_45 = [
+    {"name": "Microsoft Sound Mapper - Output", "max_input_channels": 0,
+     "max_output_channels": 2, "default_samplerate": 44100},
+    {"name": "Remote Audio", "max_input_channels": 0, "max_output_channels": 2,
+     "default_samplerate": 44100},
+    {"name": "Primary Sound Driver", "max_input_channels": 0,
+     "max_output_channels": 2, "default_samplerate": 44100},
+    {"name": "Remote Audio", "max_input_channels": 0, "max_output_channels": 2,
+     "default_samplerate": 44100},
+    {"name": "Remote Audio", "max_input_channels": 0, "max_output_channels": 2,
+     "default_samplerate": 48000},
+    {"name": "CABLE Output (VB-Audio Point)", "max_input_channels": 16,
+     "max_output_channels": 0, "default_samplerate": 48000},
+    {"name": "Output (VB-Audio Point)", "max_input_channels": 0,
+     "max_output_channels": 16, "default_samplerate": 48000},
+    {"name": "Input (VB-Audio Point)", "max_input_channels": 16,
+     "max_output_channels": 0, "default_samplerate": 48000},
+]
+
+
 def test_list_audio_devices_wraps_sounddevice_output():
     with patch("teams_simulator.devices.sd.query_devices", return_value=FAKE_DEVICES_WITH_CABLE):
         result = devices.list_audio_devices()
@@ -63,6 +86,34 @@ def test_find_cable_output_returns_capture_endpoint():
 def test_find_cable_output_returns_none_when_missing():
     with patch("teams_simulator.devices.sd.query_devices", return_value=FAKE_DEVICES_NO_CABLE):
         assert devices.find_cable_output() is None
+
+
+def test_find_cable_input_handles_driver_pack_45_naming():
+    """Driver Pack 45 renames 'CABLE Input' to 'Output (VB-Audio Point)'."""
+    with patch("teams_simulator.devices.sd.query_devices", return_value=FAKE_DEVICES_DRIVER_PACK_45):
+        cable = devices.find_cable_input()
+    assert cable.name == "Output (VB-Audio Point)"
+    assert cable.is_output
+
+
+def test_find_cable_output_handles_driver_pack_45_naming():
+    """Driver Pack 45 keeps 'CABLE Output' but appends '(VB-Audio Point)'."""
+    with patch("teams_simulator.devices.sd.query_devices", return_value=FAKE_DEVICES_DRIVER_PACK_45):
+        cable = devices.find_cable_output()
+    assert cable is not None
+    assert cable.name == "CABLE Output (VB-Audio Point)"
+    assert cable.max_input_channels > 0
+
+
+def test_find_cable_input_prefers_legacy_name_when_both_present():
+    """If a system has both DP43 and DP45 endpoints, prefer the legacy one."""
+    mixed = FAKE_DEVICES_DRIVER_PACK_45 + [
+        {"name": "CABLE Input (VB-Audio Virtual Cable)", "max_input_channels": 0,
+         "max_output_channels": 2, "default_samplerate": 48000},
+    ]
+    with patch("teams_simulator.devices.sd.query_devices", return_value=mixed):
+        cable = devices.find_cable_input()
+    assert "CABLE Input" in cable.name
 
 
 def test_check_obs_virtual_camera_passes_when_open_succeeds():
