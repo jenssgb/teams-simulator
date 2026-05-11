@@ -44,24 +44,36 @@ if ($os) {
 }
 $elev = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Out-Both ("elevated      : {0}" -f $elev)
+Out-Both ("session name  : {0}" -f $env:SESSIONNAME)
+$inRdp = ($env:SESSIONNAME -like 'RDP*')
+Out-Both ("inside RDP    : {0}" -f $inRdp)
+if ($inRdp) {
+    Out-Both ""
+    Out-Both "  >>>>>> WARNING: you are inside a Remote Desktop session <<<<<<"
+    Out-Both "  RDP redirects audio devices and HIDES local virtual cables"
+    Out-Both "  from WASAPI -> Microsoft Teams cannot see VB-Cable as a mic."
+    Out-Both ""
+    Out-Both "  Fix: in mstsc Local Resources -> Remote Audio Settings:"
+    Out-Both "    - Remote audio playback : 'Play on remote computer'"
+    Out-Both "    - Remote audio recording: 'Do not record'"
+    Out-Both "  Or connect via the *console session* (Hyper-V Connect / Cloud PC portal)."
+}
 Out-Both ("repo          : {0}" -f $RepoRoot)
 
 # ---------------------------------------------------------------------------
-Section 'HVCI / Memory Integrity  (this commonly blocks VB-Cable on Win11)'
+Section 'HVCI / Memory Integrity'
 # ---------------------------------------------------------------------------
+# Note: VB-Cable Driver Pack 45 IS Microsoft-attested (signed by
+# 'Microsoft Windows Hardware Compatibility Publisher') so HVCI does
+# *not* block it. We only show this for completeness.
 $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction SilentlyContinue
 if (-not $dg) {
-    Out-Both "  (Win32_DeviceGuard not available - probably non-Pro SKU; OK)"
+    Out-Both "  (Win32_DeviceGuard not available)"
 } else {
     Out-Both ("  VBS status            : {0}   (0=off, 1=configured, 2=running)" -f $dg.VirtualizationBasedSecurityStatus)
     Out-Both ("  SecurityServicesRunning: {0}   (1=Cred Guard, 2=HVCI/Memory Integrity)" -f ($dg.SecurityServicesRunning -join ','))
     if ($dg.SecurityServicesRunning -contains 2) {
-        Out-Both ""
-        Out-Both "  >>>>>> WARNING: Memory Integrity is ON <<<<<<"
-        Out-Both "  This is the #1 reason VB-Cable does not load on Windows 11 VMs."
-        Out-Both "  Fix:  Settings -> Privacy & security -> Windows Security ->"
-        Out-Both "        Device security -> Core isolation details ->"
-        Out-Both "        Memory integrity = OFF  -> reboot."
+        Out-Both "  Memory Integrity is ON. (VB-Cable DP45 is MS-attested, so this is fine.)"
     }
 }
 
@@ -139,6 +151,41 @@ Section 'OBS Virtual Camera DirectShow filter'
 $obsClsid = '{A3FCE0F5-3493-419F-958A-ABA1250EC20B}'
 foreach ($p in "HKLM:\SOFTWARE\Classes\CLSID\$obsClsid", "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$obsClsid") {
     if (Test-Path $p) { Out-Both ("  [OK]   $p") } else { Out-Both ("  [MISS] $p") }
+}
+
+# ---------------------------------------------------------------------------
+Section 'WASAPI capture endpoints (the registry view Windows uses)'
+# ---------------------------------------------------------------------------
+# Look directly at the MMDevice registry. If VB-Cable shows up here it
+# means WASAPI knows about it and Microsoft Teams CAN pick it.
+$captureRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture'
+if (Test-Path $captureRoot) {
+    $matched = $false
+    Get-ChildItem $captureRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        $propsKey = Join-Path $_.PSPath 'Properties'
+        $props = Get-ItemProperty -Path $propsKey -ErrorAction SilentlyContinue
+        # 0a89 = friendly name, 14 = device desc, 0c = state (1=active)
+        $name = $null
+        foreach ($v in @('{a45c254e-df1c-4efd-8020-67d146a850e0},2',
+                         '{b3f8fa53-0004-438e-9003-51a46e139bfc},6')) {
+            if ($props.PSObject.Properties.Name -contains $v) {
+                $name = $props.$v
+                break
+            }
+        }
+        if ($name -and ($name -match 'CABLE|VB-Audio|VB-Cable')) {
+            $stateProp = '{a45c254e-df1c-4efd-8020-67d146a850e0},25'
+            $state = if ($props.PSObject.Properties.Name -contains $stateProp) { $props.$stateProp } else { '?' }
+            Out-Both ("  [WASAPI] {0}    (state={1}, key={2})" -f $name, $state, $_.PSChildName)
+            $matched = $true
+        }
+    }
+    if (-not $matched) {
+        Out-Both "  (no VB-Cable / CABLE device registered as WASAPI capture endpoint)"
+        Out-Both "  -> Teams cannot see it. Run: setup\fix-audio.ps1  to force re-enumeration."
+    }
+} else {
+    Out-Both "  (MMDevices\Audio\Capture registry hive missing - audio service broken?)"
 }
 
 # ---------------------------------------------------------------------------

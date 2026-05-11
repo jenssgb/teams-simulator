@@ -122,6 +122,21 @@ class App:
         self.dev_mic_label.pack(anchor="w", padx=8, pady=2)
         self.dev_cam_label = ttk.Label(dev_frame, text="checking…")
         self.dev_cam_label.pack(anchor="w", padx=8, pady=2)
+        # Surface the most common gotcha early: RDP sessions hide local
+        # virtual audio devices from WASAPI -> Teams cannot see VB-Cable.
+        import os as _os
+        if (_os.environ.get("SESSIONNAME", "").upper().startswith("RDP")):
+            self.dev_rdp_label = ttk.Label(
+                dev_frame,
+                text=(
+                    "⚠ Running inside an RDP session. Windows RDP redirects audio and HIDES "
+                    "local virtual cables from Teams. Connect via the console session "
+                    "(Hyper-V Connect / Cloud-PC portal) or set 'Play on remote computer' in mstsc."
+                ),
+                foreground="dark orange",
+                wraplength=720,
+            )
+            self.dev_rdp_label.pack(anchor="w", padx=8, pady=(2, 0))
         self.dev_hint_label = ttk.Label(
             dev_frame,
             text="If a device is missing, run setup\\install.ps1 (as Administrator), or click Diagnostics for details.",

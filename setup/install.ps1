@@ -269,6 +269,55 @@ function Test-VBCableInstalled {
     return $false
 }
 
+function Test-RemoteSession {
+    # SESSIONNAME starting with RDP- means we're inside a Terminal-Services /
+    # Remote Desktop session. In that case the RDP audio redirection layer
+    # masks local virtual audio devices from WASAPI -> Teams cannot see them.
+    return ($env:SESSIONNAME -like 'RDP*')
+}
+
+function Restart-AudioStack {
+    # Force Windows to re-enumerate audio endpoints. Used immediately after
+    # VB-Cable install (and on every -Force run) so the new endpoint shows
+    # up under WASAPI without requiring a reboot. No-op if everything is
+    # already correctly enumerated.
+    Write-Step 'forcing audio endpoint re-enumeration (pnputil + service restart)'
+
+    if ($script:DryRun) {
+        Write-Dry 'would: pnputil /restart-device for each VB-Audio MEDIA device'
+        Write-Dry 'would: Stop-Service Audiosrv,AudioEndpointBuilder; Start-Service ...'
+        return
+    }
+
+    # 1. Restart each VB-Audio PnP device so WASAPI re-publishes the endpoint
+    $devices = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+        ($_.FriendlyName -like '*VB-Audio*' -or $_.FriendlyName -like 'CABLE *' -or $_.FriendlyName -like '*VB-Audio Point*') -and
+        $_.Status -ne 'Unknown'
+    }
+    foreach ($d in $devices) {
+        try {
+            $out = & pnputil.exe /restart-device "$($d.InstanceId)" 2>&1 | Out-String
+            Write-Ok "restarted: $($d.FriendlyName) ($($d.InstanceId))"
+            $out -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        } catch {
+            Write-Warn2 "could not restart $($d.FriendlyName): $_"
+        }
+    }
+
+    # 2. Cycle the audio services
+    try {
+        Stop-Service Audiosrv -Force -ErrorAction Stop
+        Stop-Service AudioEndpointBuilder -Force -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        Start-Service AudioEndpointBuilder
+        Start-Service Audiosrv
+        Start-Sleep -Seconds 3
+        Write-Ok 'Audiosrv + AudioEndpointBuilder cycled'
+    } catch {
+        Write-Warn2 "could not cycle audio services: $_"
+    }
+}
+
 function Test-ObsVirtualCamRegistered {
     # The OBS Virtual Camera registers as a DirectShow source named
     # "OBS Virtual Camera" under HKLM\SOFTWARE\Classes\CLSID. Easiest
@@ -662,6 +711,31 @@ Write-Journal 'INFO' "mode: $(if($Auto){'Auto '}else{''})$(if($NoReboot){'NoRebo
 
 Assert-Admin
 
+# ---------------------------------------------------------------------------
+# Remote-session early-warning
+# ---------------------------------------------------------------------------
+if (Test-RemoteSession) {
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host " WARNING: you are running inside a Remote Desktop / RDP session." -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Yellow
+    Write-Host " Inside RDP, Windows redirects audio to the *client* PC by"      -ForegroundColor Yellow
+    Write-Host " default and HIDES local virtual audio devices like VB-Cable"    -ForegroundColor Yellow
+    Write-Host " from WASAPI -> Microsoft Teams will not see VB-Cable as a mic." -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Yellow
+    Write-Host " To fix, edit your .rdp file or mstsc Local Resources and:"     -ForegroundColor Yellow
+    Write-Host "   - Remote audio playback : 'Play on remote computer'"          -ForegroundColor Gray
+    Write-Host "   - Remote audio recording: 'Do not record'"                    -ForegroundColor Gray
+    Write-Host " ...then reconnect."                                             -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host " Better: connect to this VM via the *console session* (not RDP)" -ForegroundColor Yellow
+    Write-Host " for testing - e.g. via Hyper-V Manager 'Connect' or the"        -ForegroundColor Yellow
+    Write-Host " native portal session for Cloud PCs / Dev Boxes."               -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Start-Sleep -Seconds 3
+}
+
 if ($ContinueAfterReboot) {
     # Post-reboot phase: only deps + verify, then clean up.
     # Wrap everything so a failure does NOT slam the window shut before
@@ -671,6 +745,7 @@ if ($ContinueAfterReboot) {
     try {
         Update-SessionPath
         Install-PythonDeps
+        Restart-AudioStack
         Invoke-Verify
         New-AppShortcuts
         Unregister-ResumeTask
@@ -681,7 +756,7 @@ if ($ContinueAfterReboot) {
         Write-Host " (or in the Start Menu)." -ForegroundColor Green
         Write-Host ""
         Write-Host " In Teams pick:" -ForegroundColor Green
-        Write-Host "   Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
+        Write-Host "   Microphone : 'CABLE Output' (any '(VB-Audio ...)' variant)" -ForegroundColor Gray
         Write-Host "   Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
         Write-Host "============================================================" -ForegroundColor Green
     } catch {
@@ -728,6 +803,7 @@ if ($script:RebootRequired) {
     }
 } else {
     Install-PythonDeps
+    Restart-AudioStack
     Invoke-Verify
     New-AppShortcuts
 }

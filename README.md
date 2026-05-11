@@ -238,12 +238,48 @@ software.
 
 ## 🩹 Troubleshooting
 
+> **First step for ANY device problem:** click **🩺 Diagnostics** in the GUI
+> (or run `setup\diagnose.ps1`). It writes a full report to
+> `setup\_logs\diagnose-*.txt` AND copies it to your clipboard so you can
+> just paste it into a bug report.
+
+<details>
+<summary><strong>⚠️ I'm running this inside an RDP / Remote-Desktop session</strong></summary>
+
+**This is the #1 cause of "Teams cannot see VB-Cable as a microphone" on
+Windows 11 VMs.** RDP redirects audio to the *client* PC and replaces the
+local audio devices with a single *Remote Audio* endpoint. Local virtual
+cables disappear from WASAPI — and Teams uses WASAPI.
+
+Two ways to fix:
+
+1. **Connect via the console session** (recommended for testing): use
+   *Hyper-V Manager → Connect*, the Cloud-PC portal, the Microsoft Dev Box
+   portal, or `vmconnect.exe`. These give you a non-RDP session where local
+   audio devices are visible.
+2. **Or** edit your `.rdp` file / open `mstsc → Show Options → Local
+   Resources → Remote audio settings`:
+   - **Remote audio playback:** *Play on remote computer*
+   - **Remote audio recording:** *Do not record*
+
+Then reconnect.
+
+The installer + diagnostics + GUI all warn you when they detect an RDP
+session, so you know up-front.
+</details>
+
 <details>
 <summary><strong>Teams shows "Microphone not found"</strong></summary>
 
-Did you reboot after `install.ps1`? VB-Cable is a kernel-mode driver and
-only appears after a reboot. Run `setup\verify.ps1` — it will tell you
-which device is missing.
+1. Did you **reboot** after the first `install.ps1`? VB-Cable is a
+   kernel-mode driver and only enumerates after a reboot.
+2. Run **`setup\diagnose.ps1`** — the report tells you exactly which layer
+   is missing (driver file, PnP device, WASAPI endpoint, PortAudio).
+3. If the driver IS installed but Teams still doesn't see it, run
+   **`setup\fix-audio.ps1`** (admin) — it kicks the VB-Cable PnP device via
+   `pnputil /restart-device` and cycles `Audiosrv` + `AudioEndpointBuilder`
+   to force WASAPI re-enumeration.
+4. If you're in an RDP session, see the section above.
 </details>
 
 <details>
@@ -267,6 +303,23 @@ PATH is refreshed. WAV / FLAC / OGG don't need ffmpeg.
 Increase the block size in `src/teams_simulator/config.py`
 (`DEFAULT_BLOCK_SIZE`) from 960 to e.g. 1920, or lower the video FPS
 (GUI: Options → FPS).
+</details>
+
+<details>
+<summary><strong>VB-Cable Driver Pack 45 device names are different</strong></summary>
+
+Driver Pack 45 (Oct 2024) renamed the endpoints from
+`CABLE Input (VB-Audio Virtual Cable)` to `Output (VB-Audio Point)` and
+similar. The simulator handles both schemas — in Teams just look for any
+device whose name contains `CABLE Output` or `VB-Audio`.
+</details>
+
+<details>
+<summary><strong>Memory Integrity (HVCI) is enabled — is that a problem?</strong></summary>
+
+No. VB-Cable Driver Pack 45 is signed by *Microsoft Windows Hardware
+Compatibility Publisher* (attested), so HVCI does **not** block it. You
+do not need to disable Memory Integrity.
 </details>
 
 <details>
