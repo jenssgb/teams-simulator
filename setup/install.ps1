@@ -576,13 +576,52 @@ Assert-Admin
 
 if ($ContinueAfterReboot) {
     # Post-reboot phase: only deps + verify, then clean up.
+    # Wrap everything so a failure does NOT slam the window shut before
+    # the user can read what went wrong.
     Write-Step "post-reboot phase"
-    Update-SessionPath
-    Install-PythonDeps
-    Invoke-Verify
-    Unregister-ResumeTask
-    Write-Host ""
-    Write-Host "Setup complete (post-reboot phase)." -ForegroundColor Magenta
+    $resumeError = $null
+    try {
+        Update-SessionPath
+        Install-PythonDeps
+        Invoke-Verify
+        Unregister-ResumeTask
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Green
+        Write-Host " Setup complete." -ForegroundColor Green
+        Write-Host " In Teams pick:" -ForegroundColor Green
+        Write-Host "   Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
+        Write-Host "   Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
+        Write-Host " Then run:" -ForegroundColor Green
+        Write-Host "   C:\teams-simulator\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
+        Write-Host "============================================================" -ForegroundColor Green
+    } catch {
+        $resumeError = $_
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host " POST-REBOOT SETUP FAILED" -ForegroundColor Red
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Error: $resumeError" -ForegroundColor Yellow
+        if ($_.ScriptStackTrace) {
+            Write-Host ""
+            Write-Host "Stack trace:" -ForegroundColor DarkGray
+            Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+        }
+        Write-Host ""
+        Write-Host "Full log: $LogFile" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Recovery steps:" -ForegroundColor Yellow
+        Write-Host "  1. cd C:\teams-simulator" -ForegroundColor Gray
+        Write-Host "  2. .\setup\verify.ps1                       (see exactly what is missing)" -ForegroundColor Gray
+        Write-Host "  3. Get-Content '$LogFile' | more            (read the full setup log)" -ForegroundColor Gray
+        Write-Host "  4. .\setup\install.ps1 -Force               (re-run the setup; idempotent)" -ForegroundColor Gray
+        Write-Host ""
+    } finally {
+        Write-Host ""
+        Write-Host "Press Enter to close this window..." -ForegroundColor Cyan
+        try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
+    }
+    if ($resumeError) { exit 1 }
     return
 }
 

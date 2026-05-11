@@ -44,6 +44,23 @@ function Check {
     }
 }
 
+function Get-LastPythonError {
+    # Pull the last meaningful "ErrorType: message" line out of a Python
+    # traceback so we don't spam the user with a wall of stack-trace text.
+    param([string]$Output)
+    if (-not $Output) { return '' }
+    $lines = @($Output -split "`r?`n" | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+    # Walk from the end - the actual exception line is always at the bottom.
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $ln = $lines[$i]
+        if ($ln -match '([A-Za-z_][A-Za-z0-9_.]*Error):\s*(.+)$') {
+            return ("{0}: {1}" -f $matches[1], $matches[2])
+        }
+    }
+    if ($lines.Count -gt 0) { return $lines[-1] }
+    return $Output
+}
+
 function Find-RealPython {
     # Same idea as install.ps1's Find-PythonExe: ignore the Microsoft
     # Store python alias (0-byte stub in WindowsApps) and surface a
@@ -116,7 +133,8 @@ if ($venvOk) {
     Check "VB-Cable 'CABLE Input' visible (used as audio sink)" {
         $name = & $VenvPy -c "from teams_simulator.devices import find_cable_input; print(find_cable_input())" 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "VB-Cable missing; install + reboot. Detail: $name"
+            $detail = Get-LastPythonError $name
+            throw "VB-Cable not visible to PortAudio. $detail  -- VB-Cable installs the driver but Windows only loads it after a reboot. If you already rebooted: re-run setup\install.ps1 -Force."
         }
         return $name
     } | Out-Null
@@ -124,7 +142,8 @@ if ($venvOk) {
     Check "VB-Cable 'CABLE Output' visible (used as Teams microphone)" {
         $name = & $VenvPy -c "from teams_simulator.devices import find_cable_output; n = find_cable_output(); print(n if n else 'NONE')" 2>&1
         if ($LASTEXITCODE -ne 0 -or $name -eq 'NONE') {
-            throw "Teams will not see a microphone; reinstall VB-Cable"
+            $detail = Get-LastPythonError $name
+            throw "Teams will not see a microphone. $detail  -- reboot, or re-run setup\install.ps1 -Force."
         }
         return $name
     } | Out-Null
@@ -132,7 +151,8 @@ if ($venvOk) {
     Check "OBS Virtual Camera DirectShow filter usable" {
         $msg = & $VenvPy -c "from teams_simulator.devices import check_obs_virtual_camera; check_obs_virtual_camera(); print('ok')" 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "OBS Virtual Camera not registered ($msg). Install OBS Studio (winget install OBSProject.OBSStudio) or rerun setup\install.ps1"
+            $detail = Get-LastPythonError $msg
+            throw "OBS Virtual Camera not registered. $detail  -- run: winget install OBSProject.OBSStudio  (and re-run setup\install.ps1)."
         }
     } | Out-Null
 }
