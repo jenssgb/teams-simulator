@@ -1,0 +1,366 @@
+"""Tkinter UI for the Teams Simulator.
+
+Run with ``python -m teams_simulator`` (which calls :func:`main`).
+
+The UI is intentionally minimal:
+
+* a top status bar showing the state of the two virtual devices,
+* file pickers for the audio and avatar image,
+* a row of toggles (loop, fps),
+* Start / Pause / Stop buttons,
+* a live RMS level meter,
+* a scrolling log at the bottom.
+
+All long-running work happens in the :class:`SimulatorController` and its
+worker threads; the UI thread only updates widgets via
+``root.after(...)``.
+"""
+
+from __future__ import annotations
+
+import logging
+import queue
+import sys
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, ttk
+from typing import Optional
+
+from .config import DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH
+from .devices import (
+    CABLE_OUTPUT_NAME,
+    OBS_VIRTUAL_CAMERA_NAME,
+    DeviceNotFoundError,
+    check_obs_virtual_camera,
+    find_cable_input,
+    find_cable_output,
+)
+from .sync import SimulatorController, State, Status
+
+log = logging.getLogger(__name__)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SAMPLES_DIR = REPO_ROOT / "samples"
+DEMO_AUDIO = SAMPLES_DIR / "demo_audio.wav"
+DEMO_IMAGE = SAMPLES_DIR / "demo_avatar.png"
+
+
+class _TkLogHandler(logging.Handler):
+    """Logging handler that pushes records onto a thread-safe queue."""
+
+    def __init__(self, sink: queue.Queue):
+        super().__init__()
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._sink.put_nowait(self.format(record))
+        except queue.Full:
+            pass
+
+
+class App:
+    POLL_MS = 100  # how often we refresh status & drain the log queue
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        root.title("Teams Simulator")
+        root.geometry("680x540")
+        root.minsize(620, 480)
+
+        # State -----------------------------------------------------------
+        self.controller: Optional[SimulatorController] = None
+        self.audio_path = tk.StringVar(value=str(DEMO_AUDIO) if DEMO_AUDIO.exists() else "")
+        self.image_path = tk.StringVar(value=str(DEMO_IMAGE) if DEMO_IMAGE.exists() else "")
+        self.loop_var = tk.BooleanVar(value=True)
+        self.fps_var = tk.IntVar(value=DEFAULT_VIDEO_FPS)
+        self.status_text = tk.StringVar(value="Idle")
+        self.audio_level = tk.DoubleVar(value=0.0)
+        self.position_text = tk.StringVar(value="00:00 / 00:00")
+
+        self.log_queue: queue.Queue[str] = queue.Queue(maxsize=500)
+        self._setup_logging()
+
+        self._build_ui()
+        self._refresh_device_status()
+        self.root.after(self.POLL_MS, self._poll)
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
+        pad = {"padx": 8, "pady": 4}
+
+        # Device status panel ---------------------------------------------
+        dev_frame = ttk.LabelFrame(self.root, text="Virtual devices")
+        dev_frame.pack(fill="x", **pad)
+
+        self.dev_mic_label = ttk.Label(dev_frame, text="checking…")
+        self.dev_mic_label.pack(anchor="w", padx=8, pady=2)
+        self.dev_cam_label = ttk.Label(dev_frame, text="checking…")
+        self.dev_cam_label.pack(anchor="w", padx=8, pady=2)
+        self.dev_hint_label = ttk.Label(
+            dev_frame,
+            text="If a device is missing, run setup\\install.ps1 (as Administrator).",
+            foreground="gray",
+        )
+        self.dev_hint_label.pack(anchor="w", padx=8, pady=(0, 4))
+        ttk.Button(dev_frame, text="Re-check", command=self._refresh_device_status).pack(
+            anchor="e", padx=8, pady=4
+        )
+
+        # Files panel ------------------------------------------------------
+        files_frame = ttk.LabelFrame(self.root, text="Inputs")
+        files_frame.pack(fill="x", **pad)
+
+        self._build_file_row(files_frame, 0, "Audio file:", self.audio_path,
+                             ("Audio", "*.wav *.flac *.ogg *.mp3 *.aiff"))
+        self._build_file_row(files_frame, 1, "Avatar image:", self.image_path,
+                             ("Image", "*.png *.jpg *.jpeg *.bmp"))
+
+        # Options panel ----------------------------------------------------
+        opt_frame = ttk.LabelFrame(self.root, text="Options")
+        opt_frame.pack(fill="x", **pad)
+        ttk.Checkbutton(opt_frame, text="Loop audio", variable=self.loop_var).grid(
+            row=0, column=0, padx=8, pady=4, sticky="w"
+        )
+        ttk.Label(opt_frame, text="FPS:").grid(row=0, column=1, padx=(20, 4), sticky="e")
+        ttk.Spinbox(opt_frame, from_=10, to=60, textvariable=self.fps_var, width=5).grid(
+            row=0, column=2, padx=(0, 8), sticky="w"
+        )
+
+        # Controls + status -----------------------------------------------
+        ctrl_frame = ttk.Frame(self.root)
+        ctrl_frame.pack(fill="x", **pad)
+        self.btn_start = ttk.Button(ctrl_frame, text="▶ Start", command=self._on_start)
+        self.btn_start.pack(side="left", padx=4)
+        self.btn_pause = ttk.Button(ctrl_frame, text="⏸ Pause", command=self._on_pause, state="disabled")
+        self.btn_pause.pack(side="left", padx=4)
+        self.btn_stop = ttk.Button(ctrl_frame, text="⏹ Stop", command=self._on_stop, state="disabled")
+        self.btn_stop.pack(side="left", padx=4)
+        ttk.Label(ctrl_frame, textvariable=self.position_text).pack(side="right", padx=8)
+
+        meter_frame = ttk.LabelFrame(self.root, text="Live audio level")
+        meter_frame.pack(fill="x", **pad)
+        self.level_bar = ttk.Progressbar(
+            meter_frame, orient="horizontal", mode="determinate",
+            maximum=100.0, variable=self.audio_level,
+        )
+        self.level_bar.pack(fill="x", padx=8, pady=8)
+
+        ttk.Label(self.root, textvariable=self.status_text, foreground="navy").pack(
+            anchor="w", padx=12, pady=(0, 4)
+        )
+
+        # Log pane ---------------------------------------------------------
+        log_frame = ttk.LabelFrame(self.root, text="Log")
+        log_frame.pack(fill="both", expand=True, **pad)
+        self.log_text = tk.Text(log_frame, height=8, wrap="word", state="disabled",
+                                font=("Consolas", 9))
+        scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.log_text.pack(fill="both", expand=True)
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build_file_row(
+        self, parent: ttk.LabelFrame, row: int, label: str,
+        var: tk.StringVar, filetypes: tuple[str, str],
+    ) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, padx=8, pady=4, sticky="e")
+        ttk.Entry(parent, textvariable=var, width=60).grid(
+            row=row, column=1, padx=4, pady=4, sticky="we"
+        )
+        ttk.Button(
+            parent, text="Browse…",
+            command=lambda v=var, f=filetypes: self._pick_file(v, f),
+        ).grid(row=row, column=2, padx=4, pady=4)
+        parent.columnconfigure(1, weight=1)
+
+    def _pick_file(self, var: tk.StringVar, filetypes: tuple[str, str]) -> None:
+        initial = Path(var.get()).parent if var.get() else SAMPLES_DIR
+        path = filedialog.askopenfilename(
+            initialdir=str(initial),
+            filetypes=[filetypes, ("All files", "*.*")],
+        )
+        if path:
+            var.set(path)
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+    def _setup_logging(self) -> None:
+        handler = _TkLogHandler(self.log_queue)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(message)s",
+                                              datefmt="%H:%M:%S"))
+        root_logger = logging.getLogger("teams_simulator")
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(handler)
+
+    def _append_log(self, line: str) -> None:
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", line + "\n")
+        # Keep last ~2000 lines.
+        line_count = int(self.log_text.index("end-1c").split(".")[0])
+        if line_count > 2000:
+            self.log_text.delete("1.0", f"{line_count - 2000}.0")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Device status
+    # ------------------------------------------------------------------
+    def _refresh_device_status(self) -> None:
+        # Run probes in a worker so the UI never blocks on PortAudio /
+        # pyvirtualcam initialisation.
+        def probe():
+            mic_ok = mic_msg = cam_ok = cam_msg = None
+            try:
+                cable_in = find_cable_input()
+                cable_out = find_cable_output()
+                mic_ok = True
+                if cable_out is not None:
+                    mic_msg = (f"OK  Mic ready (Teams: select '{cable_out.name}'); "
+                               f"writing to '{cable_in.name}'")
+                else:
+                    mic_msg = (f"OK  '{cable_in.name}' present, but no '{CABLE_OUTPUT_NAME}' "
+                               "device — Teams won't see a microphone.")
+                    mic_ok = False
+            except DeviceNotFoundError as exc:
+                mic_ok = False
+                mic_msg = f"FAIL  {exc}".replace("\n", " ")
+
+            try:
+                check_obs_virtual_camera()
+                cam_ok = True
+                cam_msg = f"OK  Cam ready (Teams: select '{OBS_VIRTUAL_CAMERA_NAME}')"
+            except DeviceNotFoundError as exc:
+                cam_ok = False
+                cam_msg = f"FAIL  {exc}".replace("\n", " ")
+
+            self.root.after(0, self._apply_device_status, mic_ok, mic_msg, cam_ok, cam_msg)
+
+        threading.Thread(target=probe, daemon=True).start()
+
+    def _apply_device_status(self, mic_ok: bool, mic_msg: str, cam_ok: bool, cam_msg: str) -> None:
+        self.dev_mic_label.config(text="🎤 " + mic_msg, foreground=("dark green" if mic_ok else "red"))
+        self.dev_cam_label.config(text="📷 " + cam_msg, foreground=("dark green" if cam_ok else "red"))
+
+    # ------------------------------------------------------------------
+    # Controls
+    # ------------------------------------------------------------------
+    def _on_start(self) -> None:
+        audio = self.audio_path.get().strip()
+        image = self.image_path.get().strip()
+        if not audio or not Path(audio).is_file():
+            self._append_log(f"ERROR: audio file not found: {audio!r}")
+            return
+        if not image or not Path(image).is_file():
+            self._append_log(f"ERROR: image file not found: {image!r}")
+            return
+
+        try:
+            self.controller = SimulatorController.from_paths(
+                audio_path=audio,
+                image_path=image,
+                loop=self.loop_var.get(),
+                fps=int(self.fps_var.get()),
+                width=DEFAULT_VIDEO_WIDTH,
+                height=DEFAULT_VIDEO_HEIGHT,
+            )
+            self.controller.add_listener(self._on_status)
+            self.controller.start()
+        except Exception as exc:
+            self._append_log(f"ERROR: {exc}")
+            self.controller = None
+            return
+
+        self.btn_start.configure(state="disabled")
+        self.btn_pause.configure(state="normal", text="⏸ Pause")
+        self.btn_stop.configure(state="normal")
+
+    def _on_pause(self) -> None:
+        if self.controller is None:
+            return
+        status = self.controller.get_status()
+        if status.state == State.RUNNING:
+            self.controller.pause()
+            self.btn_pause.configure(text="▶ Resume")
+        elif status.state == State.PAUSED:
+            self.controller.resume()
+            self.btn_pause.configure(text="⏸ Pause")
+
+    def _on_stop(self) -> None:
+        if self.controller is None:
+            return
+        self.controller.stop()
+        self.controller = None
+        self.btn_start.configure(state="normal")
+        self.btn_pause.configure(state="disabled", text="⏸ Pause")
+        self.btn_stop.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Periodic refresh
+    # ------------------------------------------------------------------
+    def _on_status(self, status: Status) -> None:
+        self.root.after(0, self._apply_status, status)
+
+    def _apply_status(self, status: Status) -> None:
+        self.status_text.set(f"{status.state.value.upper()}: {status.message}")
+        if status.state in (State.IDLE, State.ERROR):
+            self.btn_start.configure(state="normal")
+            self.btn_pause.configure(state="disabled", text="⏸ Pause")
+            self.btn_stop.configure(state="disabled")
+
+    def _poll(self) -> None:
+        # Drain the log queue.
+        for _ in range(50):
+            try:
+                line = self.log_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._append_log(line)
+
+        # Live status (level meter + position).
+        if self.controller is not None:
+            status = self.controller.get_status()
+            self.audio_level.set(min(100.0, status.audio_level * 100.0 * 2.0))
+            self.position_text.set(
+                f"{_fmt_time(status.audio_position_seconds)} / "
+                f"{_fmt_time(status.audio_duration_seconds)}"
+            )
+        else:
+            self.audio_level.set(0.0)
+            self.position_text.set("00:00 / 00:00")
+
+        self.root.after(self.POLL_MS, self._poll)
+
+    def _on_close(self) -> None:
+        if self.controller is not None:
+            try:
+                self.controller.stop()
+            except Exception:
+                log.exception("stop on close failed")
+        self.root.destroy()
+
+
+def _fmt_time(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def main() -> int:
+    root = tk.Tk()
+    App(root)
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
