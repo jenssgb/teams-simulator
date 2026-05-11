@@ -44,15 +44,37 @@ function Check {
     }
 }
 
+function Find-RealPython {
+    # Same idea as install.ps1's Find-PythonExe: ignore the Microsoft
+    # Store python alias (0-byte stub in WindowsApps) and surface a
+    # path to a real python.exe, or $null.
+    $py = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($py) {
+        $exe = & $py.Source -3 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path $exe)) { return $exe }
+    }
+    foreach ($c in @(Get-Command python.exe -All -ErrorAction SilentlyContinue)) {
+        if ($c.Source -match '\\WindowsApps\\python\.exe$') {
+            $f = Get-Item -LiteralPath $c.Source -ErrorAction SilentlyContinue
+            if (-not $f -or $f.Length -lt 1024) { continue }
+        }
+        $out = & $c.Source --version 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $out -match 'Python\s+3\.') { return $c.Source }
+    }
+    return $null
+}
+
 Write-Host ""
 Write-Host "Teams Simulator Verification" -ForegroundColor Magenta
 Write-Host "============================" -ForegroundColor Magenta
 
 # -- system tools --
-Check "python on PATH" {
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $cmd) { throw "python not on PATH" }
-    return (& python --version 2>&1)
+Check "real python on PATH (not the Store alias)" {
+    $exe = Find-RealPython
+    if (-not $exe) {
+        throw "no real python.exe found - the Microsoft Store alias does not count. Run setup\install.ps1 to install."
+    }
+    return ((& $exe --version 2>&1 | Out-String).Trim() + "  ($exe)")
 } | Out-Null
 
 Check "ffmpeg on PATH (MP3 decoding)" {

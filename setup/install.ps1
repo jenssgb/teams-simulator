@@ -347,7 +347,25 @@ function Install-VBCable {
     if ($Force -or -not (Test-Path $VBCableZip)) {
         Write-Step "downloading $VBCableUrl"
         Invoke-Action "Invoke-WebRequest $VBCableUrl -> $VBCableZip" {
-            Invoke-WebRequest -Uri $VBCableUrl -OutFile $VBCableZip -UseBasicParsing
+            # Force TLS 1.2 (Windows PowerShell 5.1 defaults can fail
+            # against modern endpoints) and retry transient failures.
+            try {
+                [Net.ServicePointManager]::SecurityProtocol =
+                    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            } catch { $null = $_ }
+            $attempts = 0
+            $maxAttempts = 3
+            while ($true) {
+                $attempts++
+                try {
+                    Invoke-WebRequest -Uri $VBCableUrl -OutFile $VBCableZip -UseBasicParsing -TimeoutSec 90
+                    break
+                } catch {
+                    if ($attempts -ge $maxAttempts) { throw }
+                    Write-Warn2 "download failed (attempt $attempts/$maxAttempts): $_  - retrying in 5s"
+                    Start-Sleep -Seconds 5
+                }
+            }
             Unblock-File -Path $VBCableZip -ErrorAction SilentlyContinue
         }
     } else {
