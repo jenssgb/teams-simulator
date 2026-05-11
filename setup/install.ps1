@@ -564,6 +564,58 @@ function Invoke-Verify {
 }
 
 # ---------------------------------------------------------------------------
+# Desktop + Start Menu shortcuts
+# ---------------------------------------------------------------------------
+function New-AppShortcuts {
+    Write-Step 'creating Desktop + Start Menu shortcuts'
+
+    $launcher = Join-Path $RepoRoot 'teams-simulator.cmd'
+    $iconPath = Join-Path $RepoRoot 'assets\app.ico'
+
+    if (-not (Test-Path $launcher)) {
+        Write-Warn2 "launcher not found: $launcher (skipping shortcuts)"
+        return
+    }
+
+    $iconArg = if (Test-Path $iconPath) { $iconPath } else { $null }
+
+    $publicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    $userDesktop   = [Environment]::GetFolderPath('Desktop')
+    $startMenuDir  = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Teams Simulator'
+
+    $targets = @(
+        (Join-Path $publicDesktop 'Teams Simulator.lnk'),
+        (Join-Path $userDesktop   'Teams Simulator.lnk'),
+        (Join-Path $startMenuDir  'Teams Simulator.lnk')
+    )
+
+    if ($script:DryRun) {
+        foreach ($t in $targets) { Write-Dry "would create shortcut: $t -> $launcher" }
+        return
+    }
+
+    if (-not (Test-Path $startMenuDir)) {
+        New-Item -ItemType Directory -Path $startMenuDir -Force | Out-Null
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($lnkPath in $targets) {
+        try {
+            $sc = $shell.CreateShortcut($lnkPath)
+            $sc.TargetPath       = $launcher
+            $sc.WorkingDirectory = $RepoRoot
+            $sc.Description      = 'Teams Simulator - virtual mic + virtual camera for Microsoft Teams'
+            $sc.WindowStyle      = 7  # minimized (the .cmd just spawns pythonw and exits)
+            if ($iconArg) { $sc.IconLocation = $iconArg }
+            $sc.Save()
+            Write-Ok "shortcut: $lnkPath"
+        } catch {
+            Write-Warn2 "could not create $lnkPath  ($_)"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 Write-Host ""
@@ -584,15 +636,17 @@ if ($ContinueAfterReboot) {
         Update-SessionPath
         Install-PythonDeps
         Invoke-Verify
+        New-AppShortcuts
         Unregister-ResumeTask
         Write-Host ""
         Write-Host "============================================================" -ForegroundColor Green
         Write-Host " Setup complete." -ForegroundColor Green
+        Write-Host " Launch the app via the 'Teams Simulator' icon on your Desktop" -ForegroundColor Green
+        Write-Host " (or in the Start Menu)." -ForegroundColor Green
+        Write-Host ""
         Write-Host " In Teams pick:" -ForegroundColor Green
         Write-Host "   Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
         Write-Host "   Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
-        Write-Host " Then run:" -ForegroundColor Green
-        Write-Host "   C:\teams-simulator\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
         Write-Host "============================================================" -ForegroundColor Green
     } catch {
         $resumeError = $_
@@ -639,6 +693,7 @@ if ($script:RebootRequired) {
 } else {
     Install-PythonDeps
     Invoke-Verify
+    New-AppShortcuts
 }
 
 Write-Host ""
@@ -647,8 +702,8 @@ Write-Host "Next steps:" -ForegroundColor Magenta
 Write-Host "  1. In Teams set:" -ForegroundColor Gray
 Write-Host "       Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
 Write-Host "       Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
-Write-Host "  2. Start the simulator:" -ForegroundColor Gray
-Write-Host "       .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
+Write-Host "  2. Launch the simulator from the 'Teams Simulator' Desktop icon" -ForegroundColor Gray
+Write-Host "     (or from the Start Menu)." -ForegroundColor Gray
 Write-Host ""
 
 if ($script:RebootRequired) {

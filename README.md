@@ -47,13 +47,13 @@ Then in **Teams → Settings → Devices** pick:
 | 🎙️ **Microphone** | `CABLE Output (VB-Audio Virtual Cable)` |
 | 📷 **Camera**     | `OBS Virtual Camera` |
 
-…and start the simulator:
+…and start the simulator — easiest way: **double-click the `Teams Simulator` icon on your Desktop** (also in the Start Menu). Or from a terminal:
 
 ```powershell
 C:\teams-simulator\.venv\Scripts\python.exe -m teams_simulator
 ```
 
-A small Tkinter window opens, pre-wired with the bundled `samples\demo_audio.wav` + `samples\demo_avatar.png`. Hit **▶ Start** and you're in the meeting.
+A small Tkinter window opens, pre-wired with the bundled `samples\demo_audio.wav` + `samples\demo_avatar.png`. Pick a hipster avatar from the dropdown, hit **▶ Start**, and you're in the meeting.
 
 ---
 

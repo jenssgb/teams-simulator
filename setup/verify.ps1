@@ -130,6 +130,24 @@ if ($venvOk) {
         return ("$($entries.Count) avatars: " + (($entries | ForEach-Object { $_.label }) -join ', '))
     } | Out-Null
 
+    Check "Desktop shortcut 'Teams Simulator' present" {
+        $candidates = @(
+            (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Teams Simulator.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Teams Simulator.lnk')
+        )
+        $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $found) {
+            throw "no Desktop shortcut found - re-run setup\install.ps1 -Force to (re)create it."
+        }
+        return $found
+    } | Out-Null
+
+    Check "Launcher 'teams-simulator.cmd' present" {
+        $launcher = Join-Path $RepoRoot 'teams-simulator.cmd'
+        if (-not (Test-Path $launcher)) { throw "missing launcher: $launcher" }
+        return $launcher
+    } | Out-Null
+
     Check "VB-Cable 'CABLE Input' visible (used as audio sink)" {
         $name = & $VenvPy -c "from teams_simulator.devices import find_cable_input; print(find_cable_input())" 2>&1
         if ($LASTEXITCODE -ne 0) {
