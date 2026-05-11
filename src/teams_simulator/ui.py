@@ -78,17 +78,27 @@ class App:
         self.controller: Optional[SimulatorController] = None
         # Bundled English speech samples for one-click testing.
         self._speech_samples: list[tuple[str, Path]] = self._discover_speech_samples()
+        # Default to the FIRST long sample if any have been downloaded
+        # (they're better for transcript testing); otherwise fall back to
+        # the first short sample, otherwise the legacy demo_audio.wav.
         default_audio: str
-        if self._speech_samples:
-            default_audio = str(self._speech_samples[0][1])
+        default_label: str = ""
+        long_default = next(
+            ((label, path) for label, path in self._speech_samples
+             if "long" in label.lower()), None,
+        )
+        if long_default is not None:
+            default_label, default_path = long_default
+            default_audio = str(default_path)
+        elif self._speech_samples:
+            default_label, default_path = self._speech_samples[0]
+            default_audio = str(default_path)
         elif DEMO_AUDIO.exists():
             default_audio = str(DEMO_AUDIO)
         else:
             default_audio = ""
         self.audio_path = tk.StringVar(value=default_audio)
-        self.sample_var = tk.StringVar(
-            value=self._speech_samples[0][0] if self._speech_samples else ""
-        )
+        self.sample_var = tk.StringVar(value=default_label)
 
         # Discover bundled avatars first so we can pre-select one as the
         # default image source.
@@ -303,13 +313,21 @@ class App:
     def _discover_speech_samples() -> list[tuple[str, Path]]:
         """Return ``[(label, path), ...]`` for every bundled English sample.
 
-        Filenames are expected to look like
-        ``sample_<n>_<title-with-underscores>.mp3`` and the human label
-        is reconstructed from the filename.
+        Looks for two things in ``samples/``:
+
+        1. Short bundled MP3s (``samples/sample_*.mp3``) - committed to git.
+        2. Long PD audiobooks (``samples/long/*.mp3``) - downloaded on
+           demand by ``scripts/download_long_samples.py``. If the manifest
+           ``samples/long/long_samples.json`` is present, its labels are
+           preferred; otherwise the filename stem is humanised.
+
+        Long samples are listed BELOW the short ones so that a fresh user
+        sees the quick verification clip first.
         """
         out: list[tuple[str, Path]] = []
         if not SAMPLES_DIR.exists():
             return out
+
         for path in sorted(SAMPLES_DIR.glob("sample_*.mp3")):
             stem = path.stem
             parts = stem.split("_", 2)
@@ -317,7 +335,29 @@ class App:
                 label = f"{parts[1]}. {parts[2].replace('_', ' ').title()}"
             else:
                 label = stem
-            out.append((label, path))
+            out.append((f"📢 short · {label}", path))
+
+        long_dir = SAMPLES_DIR / "long"
+        manifest_path = long_dir / "long_samples.json"
+        manifest_labels: dict[str, str] = {}
+        if manifest_path.exists():
+            try:
+                import json
+                entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("file") and entry.get("label"):
+                        manifest_labels[str(entry["file"])] = str(entry["label"])
+            except (ValueError, OSError):
+                pass
+
+        if long_dir.exists():
+            for path in sorted(long_dir.glob("*.mp3")):
+                label = manifest_labels.get(
+                    path.name,
+                    path.stem.replace("_", " ").title(),
+                )
+                out.append((f"🎙️ long · {label}", path))
+
         return out
 
     def _build_sample_row(self, parent: ttk.LabelFrame, row: int) -> None:
@@ -333,7 +373,7 @@ class App:
         )
         combo.grid(row=row, column=1, padx=4, pady=4, sticky="we")
         combo.bind("<<ComboboxSelected>>", self._on_sample_chosen)
-        ttk.Label(parent, text="(English TTS)", foreground="gray").grid(
+        ttk.Label(parent, text="(short = TTS, long = LibriVox PD)", foreground="gray").grid(
             row=row, column=2, padx=4, pady=4, sticky="w"
         )
 

@@ -88,10 +88,15 @@ manifest-driven (`samples/avatars/avatars.json`).
 
 ## 🎙️ Bundled English speech samples
 
-Three short, professional-grade English speech clips ship in
-`samples/sample_*.mp3` so you can verify your end-to-end Teams audio path
-**without having to find or record a file first**. Pick one from the
-**Bundled sample** dropdown in the GUI and hit ▶ Start.
+Two tiers of English speech samples ship with the simulator so you can
+go from zero to "Teams transcript flowing" in one click:
+
+### Short — instant verification (committed to git, ~575 KB total)
+
+Three short, professional-grade English speech clips in
+`samples/sample_*.mp3`. Pick one from the **Bundled sample** dropdown in
+the GUI to verify your audio path end-to-end **without having to find or
+record a file first**.
 
 | # | Voice | Style | ~Duration |
 |---|-------|-------|-----------|
@@ -100,12 +105,36 @@ Three short, professional-grade English speech clips ship in
 | 3 | Ryan (UK, male) | Storytelling | ~45 s |
 
 Generated locally with Microsoft **Edge-TTS** neural voices (the same
-engine that powers Edge Read-Aloud) — no third-party copyright, freely
-redistributable. Re-generate or change the scripts/voices any time:
+engine that powers Edge Read-Aloud) — freely redistributable. Re-generate
+or change the scripts/voices any time:
 
 ```powershell
 .venv\Scripts\python.exe scripts\generate_speech_samples.py
 ```
+
+### Long — for transcript-grade testing (downloaded on demand, ~73 MB)
+
+Three classic public-domain audiobook chapters from **LibriVox**, single
+narrator, 30-65 minutes each — long enough to actually exercise the Teams
+transcript / live-captions pipeline.
+
+| # | Title | Author | Reader | Length |
+|---|-------|--------|--------|--------|
+| 1 | A Scandal in Bohemia | A. Conan Doyle | LibriVox vol. | ~65 min |
+| 2 | The Red-Headed League | A. Conan Doyle | LibriVox vol. | ~59 min |
+| 3 | Walden — "Economy" pt. 1 | H. D. Thoreau | LibriVox vol. | ~30 min |
+
+The Windows installer downloads them automatically into
+`samples/long/` (gitignored, not in the repo). Skipped silently if you're
+offline — the GUI just shows fewer entries. Manual re-download:
+
+```powershell
+.venv\Scripts\python.exe scripts\download_long_samples.py
+```
+
+> All bundled audio is either AI-generated locally (Edge-TTS) or
+> public-domain (LibriVox / archive.org) — no third-party copyright
+> entanglement.
 
 ---
 

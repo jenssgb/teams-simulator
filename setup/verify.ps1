@@ -140,6 +140,18 @@ if ($venvOk) {
         return ("$($files.Count) samples (" + ([math]::Round((($files | Measure-Object Length -Sum).Sum / 1KB)) ) + " KB total)")
     } | Out-Null
 
+    Check "long PD audio samples present (samples\long\*.mp3)" {
+        $longDir = Join-Path $RepoRoot 'samples\long'
+        $files = Get-ChildItem $longDir -Filter '*.mp3' -ErrorAction SilentlyContinue
+        if (-not $files -or $files.Count -lt 1) {
+            # Soft warning, not a hard fail - the user may be offline or
+            # have skipped the download. Short samples + custom audio still work.
+            throw "no long monologue downloads in $longDir - run scripts\download_long_samples.py for transcript-grade test material"
+        }
+        $totalMB = [math]::Round((($files | Measure-Object Length -Sum).Sum / 1MB), 1)
+        return ("$($files.Count) long samples ($totalMB MB total)")
+    } | Out-Null
+
     Check "Desktop shortcut 'Teams Simulator' present" {
         $candidates = @(
             (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Teams Simulator.lnk'),

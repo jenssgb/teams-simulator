@@ -47,6 +47,10 @@ $RECYCLE.BIN/
 # Downloaded installers (cached by setup/install.ps1)
 setup/_downloads/
 setup/_logs/
+# Long PD audio samples downloaded on demand by scripts/download_long_samples.py
+# (~73 MB total - too large for the repo, refetched by the installer).
+samples/long/*.mp3
+samples/long/long_samples.json
 # User-supplied media (don't commit user audio/avatar files)
 user_media/
 *.user.wav

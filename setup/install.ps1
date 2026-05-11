@@ -595,6 +595,38 @@ function Install-PythonDeps {
 }
 
 # ---------------------------------------------------------------------------
+# Long PD audio samples (~73 MB, fetched on demand from archive.org/LibriVox)
+# ---------------------------------------------------------------------------
+function Get-LongSpeechSamples {
+    Write-Step 'downloading long PD audio samples (~73 MB - one time)'
+
+    $script = Join-Path $RepoRoot 'scripts\download_long_samples.py'
+    if (-not (Test-Path $script)) {
+        Write-Warn2 "scripts\download_long_samples.py missing - skipping"
+        return
+    }
+    $py = Join-Path $VenvPath 'Scripts\python.exe'
+    if (-not (Test-Path $py)) {
+        Write-Warn2 "venv python not found - skipping long-sample download"
+        return
+    }
+    if ($script:DryRun) {
+        Write-Dry "would run: $py $script"
+        return
+    }
+
+    Invoke-Action "python scripts\download_long_samples.py" {
+        & $py $script
+        # Non-fatal: the script returns 0 even when offline, so the installer
+        # never aborts because of a missing internet connection here. The
+        # GUI just shows fewer entries in the Bundled-sample dropdown.
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn2 "download_long_samples.py exited $LASTEXITCODE (non-fatal)"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Resume-after-reboot scheduling
 # ---------------------------------------------------------------------------
 function Register-ResumeTask {
@@ -664,19 +696,46 @@ function New-AppShortcuts {
 
     $iconArg = if (Test-Path $iconPath) { $iconPath } else { $null }
 
+    # We deliberately create ONE shortcut per "place a user expects it":
+    #   1) Public Desktop (visible to ALL users on this machine, including
+    #      the current one - so this also covers the 'normal' Desktop case)
+    #   2) Start Menu (Programs / Teams Simulator)
+    #
+    # Earlier versions also wrote to $env:USERPROFILE\Desktop which on
+    # OneDrive-redirected accounts is a SECOND folder rendered next to
+    # Public Desktop -- so the user saw two icons. Public Desktop alone
+    # is enough.
     $publicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
-    $userDesktop   = [Environment]::GetFolderPath('Desktop')
     $startMenuDir  = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Teams Simulator'
 
     $targets = @(
         (Join-Path $publicDesktop 'Teams Simulator.lnk'),
-        (Join-Path $userDesktop   'Teams Simulator.lnk'),
         (Join-Path $startMenuDir  'Teams Simulator.lnk')
     )
 
     if ($script:DryRun) {
         foreach ($t in $targets) { Write-Dry "would create shortcut: $t -> $launcher" }
         return
+    }
+
+    # Clean up duplicate shortcut from older installer versions that wrote
+    # to the per-user Desktop too (incl. OneDrive-redirected Desktop).
+    $stale = @()
+    foreach ($desk in @([Environment]::GetFolderPath('Desktop'),
+                         (Join-Path $env:USERPROFILE 'Desktop'),
+                         (Join-Path $env:USERPROFILE 'OneDrive\Desktop'))) {
+        if ([string]::IsNullOrWhiteSpace($desk)) { continue }
+        if ($desk -ieq $publicDesktop) { continue }
+        $candidate = Join-Path $desk 'Teams Simulator.lnk'
+        if (Test-Path $candidate) { $stale += $candidate }
+    }
+    foreach ($s in ($stale | Sort-Object -Unique)) {
+        try {
+            Remove-Item -LiteralPath $s -Force -ErrorAction Stop
+            Write-Ok "removed duplicate shortcut: $s"
+        } catch {
+            Write-Warn2 "could not remove duplicate $s  ($_)"
+        }
     }
 
     if (-not (Test-Path $startMenuDir)) {
@@ -686,6 +745,19 @@ function New-AppShortcuts {
     $shell = New-Object -ComObject WScript.Shell
     foreach ($lnkPath in $targets) {
         try {
+            # Fast-path: if the .lnk already points exactly where we want,
+            # skip rewriting it (avoids noisy 're-created' lines on every
+            # re-run via the bootstrap one-liner).
+            if (Test-Path $lnkPath) {
+                $existing = $shell.CreateShortcut($lnkPath)
+                if ($existing.TargetPath -ieq $launcher -and
+                    $existing.WorkingDirectory -ieq $RepoRoot -and
+                    (-not $iconArg -or ($existing.IconLocation -like "$iconArg*"))) {
+                    Write-Ok "shortcut already up to date: $lnkPath"
+                    continue
+                }
+            }
+
             $sc = $shell.CreateShortcut($lnkPath)
             $sc.TargetPath       = $launcher
             $sc.WorkingDirectory = $RepoRoot
@@ -745,6 +817,7 @@ if ($ContinueAfterReboot) {
     try {
         Update-SessionPath
         Install-PythonDeps
+        Get-LongSpeechSamples
         Restart-AudioStack
         Invoke-Verify
         New-AppShortcuts
@@ -803,6 +876,7 @@ if ($script:RebootRequired) {
     }
 } else {
     Install-PythonDeps
+    Get-LongSpeechSamples
     Restart-AudioStack
     Invoke-Verify
     New-AppShortcuts
