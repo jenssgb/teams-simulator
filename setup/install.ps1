@@ -224,13 +224,49 @@ function Find-PythonExe {
 $script:PythonExe = $null
 
 function Test-VBCableInstalled {
-    # The driver registers a sound device whose FriendlyName starts with
-    # "CABLE Input" / "CABLE Output". Get-PnpDevice surfaces these as
-    # AudioEndpoint or MEDIA class devices.
+    # Check FOUR independent indicators - any one is conclusive proof
+    # that VB-Cable is already installed on this machine. The PnP-only
+    # check used to give false negatives (-> reinstall loop) when the
+    # audio service had not yet enumerated the new device after install
+    # or after a fresh login.
+
+    # 1. Driver file dropped by the installer
+    $driverFiles = @(
+        "$env:SystemRoot\System32\drivers\vbaudio_cable64_win10.sys",
+        "$env:SystemRoot\System32\drivers\vbaudio_cable_win10.sys",
+        "$env:SystemRoot\System32\drivers\vbaudio_cable64.sys"
+    )
+    foreach ($f in $driverFiles) { if (Test-Path -LiteralPath $f) { return $true } }
+
+    # 2. Control panel binary that ships with the driver
+    $cp = "$env:ProgramFiles\VB\CABLE\VBCABLE_ControlPanel.exe"
+    if (Test-Path -LiteralPath $cp) { return $true }
+
+    # 3. Add/Remove Programs entry
+    $uninstallRoots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    foreach ($root in $uninstallRoots) {
+        if (-not (Test-Path $root)) { continue }
+        $hits = Get-ChildItem $root -ErrorAction SilentlyContinue |
+            Get-ItemProperty -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.DisplayName -like '*VB-CABLE*' -or
+                $_.DisplayName -like '*VB-Audio*Virtual*Cable*' -or
+                $_.Publisher   -like '*VB-Audio*'
+            }
+        if ($hits) { return $true }
+    }
+
+    # 4. Original heuristic - PnP device names (works once Windows
+    # Audio has initialised the new endpoint).
     $hits = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
         $_.FriendlyName -like '*VB-Audio*' -or $_.FriendlyName -like 'CABLE *'
     }
-    return ($null -ne $hits -and $hits.Count -gt 0)
+    if ($hits) { return $true }
+
+    return $false
 }
 
 function Test-ObsVirtualCamRegistered {
