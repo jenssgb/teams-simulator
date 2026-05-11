@@ -162,6 +162,66 @@ function Update-SessionPath {
         [Environment]::GetEnvironmentVariable('Path','User')
 }
 
+function Find-PythonExe {
+    <#
+        Returns the absolute path to a usable python.exe (>= 3.10), or
+        $null if none is installed. Critically: ignores the Microsoft
+        Store "App Execution Alias" (Windows 10/11 ships a 0-byte
+        python.exe stub in WindowsApps that just nags the user to
+        install Python from the Store - it returns from `Get-Command`
+        but throws when actually executed).
+    #>
+    # 1) Prefer the py launcher - if installed, it always points at a
+    #    real Python.
+    $py = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($py) {
+        $exe = & $py.Source -3 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path $exe)) {
+            $ver = & $exe -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+            if ($ver -match '^3\.(1[0-9]|[2-9])') { return $exe }
+        }
+    }
+
+    # 2) Walk every python.exe on PATH; skip the Store alias (zero-byte
+    #    reparse point) and require a working --version.
+    $cands = @(Get-Command python.exe -All -ErrorAction SilentlyContinue)
+    foreach ($c in $cands) {
+        if ($c.Source -match '\\WindowsApps\\python\.exe$') {
+            $f = Get-Item -LiteralPath $c.Source -ErrorAction SilentlyContinue
+            if (-not $f -or $f.Length -lt 1024) { continue }
+        }
+        $out = & $c.Source --version 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $out -match 'Python\s+3\.(1[0-9]|[2-9])') {
+            return $c.Source
+        }
+    }
+
+    # 3) Known per-user / per-machine install locations from python.org
+    #    + winget. Try newest first.
+    $known = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "C:\Program Files\Python313\python.exe",
+        "C:\Program Files\Python312\python.exe",
+        "C:\Program Files\Python311\python.exe"
+    )
+    foreach ($k in $known) {
+        if (Test-Path -LiteralPath $k) {
+            $out = & $k --version 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0 -and $out -match 'Python\s+3\.(1[0-9]|[2-9])') {
+                return $k
+            }
+        }
+    }
+
+    return $null
+}
+
+# Resolved during Install-Python; used by Install-PythonDeps and
+# friends. Avoids relying on the App Execution Alias.
+$script:PythonExe = $null
+
 function Test-VBCableInstalled {
     # The driver registers a sound device whose FriendlyName starts with
     # "CABLE Input" / "CABLE Output". Get-PnpDevice surfaces these as
@@ -228,22 +288,31 @@ function Invoke-WingetInstall {
 # ---------------------------------------------------------------------------
 function Install-Python {
     Write-Step 'Python 3.11+'
-    if (-not $Force -and (Test-CommandAvailable 'python')) {
-        $ver = (& python --version 2>&1).ToString().Trim()
-        if ($ver -match 'Python\s+3\.(1[0-9]|[2-9][0-9])') {
-            Write-Ok "found $ver"
+    if (-not $Force) {
+        $existing = Find-PythonExe
+        if ($existing) {
+            $ver = (& $existing --version 2>&1 | Out-String).Trim()
+            Write-Ok "found $ver  ($existing)"
+            $script:PythonExe = $existing
             return
         }
-        Write-Warn2 "found $ver - too old, installing 3.11"
+        Write-Skip "no real Python detected (App Execution Alias does not count)"
     }
     Invoke-WingetInstall -Id 'Python.Python.3.11'
     Update-SessionPath
-    if (-not $script:DryRun -and -not (Test-CommandAvailable 'python')) {
-        throw "Python install completed but 'python' is not on PATH. Open a fresh shell and re-run this script."
+    if ($script:DryRun) { return }
+
+    $script:PythonExe = Find-PythonExe
+    if (-not $script:PythonExe) {
+        throw @"
+Python install completed but no usable python.exe was found.
+This usually means the Microsoft Store App Execution Alias for
+'python' is shadowing the real interpreter. Open
+  Settings -> Apps -> Advanced app settings -> App execution aliases
+and turn OFF 'python.exe' and 'python3.exe', then re-run this script.
+"@
     }
-    if (-not $script:DryRun) {
-        Write-Ok ("python: " + (& python --version 2>&1))
-    }
+    Write-Ok ("python: " + (& $script:PythonExe --version 2>&1 | Out-String).Trim() + "  ($script:PythonExe)")
 }
 
 function Install-Ffmpeg {
@@ -381,13 +450,19 @@ function Install-Obs {
 }
 
 function Install-PythonDeps {
-    Write-Step "creating Python venv at $VenvPath"
+    if (-not $script:PythonExe) { $script:PythonExe = Find-PythonExe }
+    if (-not $script:DryRun -and -not $script:PythonExe) {
+        throw "No usable python.exe found - cannot create venv. (Disable the python App Execution Alias in Settings, then re-run.)"
+    }
+    $pythonExe = if ($script:PythonExe) { $script:PythonExe } else { 'python' }
+
+    Write-Step "creating Python venv at $VenvPath  (using $pythonExe)"
     if (-not $Force -and (Test-Path $VenvPy)) {
         Write-Ok 'venv already exists'
     } else {
-        Invoke-Action "create venv: python -m venv $VenvPath" {
+        Invoke-Action "create venv: $pythonExe -m venv $VenvPath" {
             if (Test-Path $VenvPath) { Remove-Item $VenvPath -Recurse -Force }
-            & python -m venv $VenvPath
+            & $pythonExe -m venv $VenvPath
             if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (exit $LASTEXITCODE)" }
         }
     }
