@@ -22,11 +22,12 @@
     resumes the script automatically after the reboot.
 
 .PARAMETER Auto
-    Fully unattended mode. Implies:
-      - no interactive prompts
-      - auto-reboot at the end if VB-Cable was just installed
-      - registers a one-shot scheduled task ("TeamsSimulatorSetupResume")
-        that re-runs this script after the reboot to finish + verify
+    Unattended mode — no interactive elevation prompts, accept all
+    third-party EULAs, install everything in silent mode, register a
+    one-shot scheduled task ("TeamsSimulatorSetupResume") that re-runs
+    this script after the reboot to finish + verify. The script asks
+    ONE final yes/no question before actually rebooting (default Y),
+    so the user can confirm the reboot happens at a sensible moment.
 
 .PARAMETER NoReboot
     Never reboot, even if VB-Cable installation needs it. The script
@@ -617,23 +618,44 @@ if ($script:RebootRequired) {
         Write-Warn2 "Reboot manually, then re-run: .\setup\install.ps1"
         exit 2
     }
+
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor Yellow
+    Write-Host " VB-Audio Virtual Cable was just installed (kernel driver)." -ForegroundColor Yellow
+    Write-Host " A reboot is REQUIRED before Teams will see the microphone." -ForegroundColor Yellow
+    Write-Host " A scheduled task will resume setup automatically after login." -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+
     if ($Auto) {
-        Write-Warn2 "Rebooting now (auto mode). Resume task will continue setup after logon."
-        if (-not $script:DryRun) {
-            Start-Sleep -Seconds 5
-            Restart-Computer -Force
+        # In -Auto mode default to Y so just hitting Enter reboots.
+        # Skip the prompt entirely under -DryRun so dryrun.ps1 doesn't hang.
+        if ($script:DryRun) {
+            Write-Dry "would prompt 'Reboot now? [Y/n]' (auto-default Y)"
+            $reboot = $true
         } else {
-            Write-Dry "would call Restart-Computer -Force"
+            $resp = Read-Host "Reboot now? [Y/n]"
+            $reboot = ($resp -eq '' -or $resp -match '^[yY]')
         }
+    } else {
+        # In interactive mode default to N to preserve the prior behaviour.
+        $resp = Read-Host "Reboot now? [y/N]"
+        $reboot = ($resp -match '^[yY]')
+    }
+
+    if ($reboot) {
+        if ($script:DryRun) {
+            Write-Dry "would call Restart-Computer -Force"
+            return
+        }
+        Write-Warn2 "Rebooting in 5 seconds... Setup will continue automatically after you log back in."
+        Start-Sleep -Seconds 5
+        Restart-Computer -Force
         return
     }
-    $resp = Read-Host "VB-Cable was just installed. Reboot now? [y/N]"
-    if ($resp -match '^[yY]') {
-        Restart-Computer -Force
-    } else {
-        Write-Warn2 "Please reboot before running the simulator (Teams will not see the mic until then)."
-        exit 2
-    }
+
+    Write-Warn2 "Reboot skipped. Teams will NOT see the microphone until you reboot."
+    Write-Warn2 "When you're ready: run  shutdown /r /t 0  -- the resume task is already registered."
+    exit 2
 }
 
 exit 0
