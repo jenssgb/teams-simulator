@@ -1,59 +1,51 @@
+<div align="center">
+
+<img src="assets/hero.png" alt="Teams Simulator" width="100%" />
+
 # Teams Simulator
 
-Stream a prepared **audio file** and a **static avatar image** (with an
-animated audio-level overlay) into Microsoft Teams on a Windows VM, as if
-they came from a real microphone and webcam.
+**Stream AI-generated audio + video into Microsoft Teams as if it came from a real participant.**
+A virtual microphone and a virtual webcam, perfectly in sync, on a fresh Windows VM, in one paste.
 
-> 🎙️📷 Use it to test Teams meeting features (recording, Copilot,
-> compliance bots, transcription, …) without needing a real participant.
+[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.13-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows&logoColor=white)](#vm-compatibility)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license--credits)
+[![Status](https://img.shields.io/badge/status-MVP%20ready-success)](#)
+[![Tests](https://img.shields.io/badge/tests-36%20passing-brightgreen)](#development)
+[![Headless install](https://img.shields.io/badge/install-headless%20one--liner-6264a7)](#-quickstart--one-paste-walk-away)
+
+</div>
+
+> 🎙️📷 Use it to test Teams meeting features (recording, Copilot, compliance bots, transcription, …) **without needing a real participant** — and without anyone ever seeing a "this Teams meeting is being recorded" because the bot was actually a person.
 
 ---
 
-## How it works
+## ⚡ Quickstart — one paste, walk away
 
-```
-your_audio.wav  ──►  sounddevice    ──►  "CABLE Input"   ──►  Teams mic
-                                          (VB-Audio Virtual Cable)
-
-your_avatar.png ──►  pyvirtualcam   ──►  "OBS Virtual Camera"  ──►  Teams cam
-   + waveform                              (DirectShow filter)
-   overlay
-```
-
-Two virtual Windows devices do the heavy lifting:
-
-| Device                 | Provided by                  | What it is                                                                  |
-| ---------------------- | ---------------------------- | --------------------------------------------------------------------------- |
-| `CABLE Input/Output`   | VB-Audio Virtual Cable       | A loopback audio driver. Anything we play to `CABLE Input` is captured by `CABLE Output`, which Teams can pick as a microphone. |
-| `OBS Virtual Camera`   | OBS Studio's DirectShow filter | A virtual webcam. We push BGR frames via `pyvirtualcam`; OBS itself doesn't even need to be running. |
-
-The simulator coordinates both sides on a single timeline: it streams
-audio frame-accurately into `CABLE Input`, samples the RMS level, and
-draws an equalizer-style waveform overlay onto the avatar image so Teams
-participants see "the avatar is talking now".
-
-## Quickstart — one paste, walk away
-
-On a fresh **Windows 10/11 VM**, open PowerShell **as Administrator** and paste:
+On a fresh **Windows 10 / 11 VM**, open PowerShell **as Administrator** and run:
 
 ```powershell
 iex (irm 'https://raw.githubusercontent.com/jenssgb/teams-simulator/main/setup/bootstrap.ps1')
 ```
 
-That one line:
+That single line will:
 
-1. installs `git` via winget if needed,
-2. clones this repo to `C:\teams-simulator`,
-3. runs `setup\install.ps1 -Auto` — installs Python 3.11, ffmpeg, **VB-Audio Virtual Cable**, **OBS Studio** (registers the Virtual Camera DirectShow filter), creates `.venv`, pip-installs everything,
-4. registers a one-shot scheduled task `TeamsSimulatorSetupResume` and **reboots automatically** (VB-Cable is a kernel driver),
-5. on the next logon the task wakes up, finishes the install, runs `verify.ps1` which prints a green **READY** banner with the exact device names to pick, and unregisters itself.
+| # | Step | What happens |
+| --- | --- | --- |
+| 1 | **Bootstrap** | Installs `git` (via winget), clones the repo to `C:\teams-simulator`. |
+| 2 | **Python 3.11** | Installed via winget — the Microsoft Store alias trap is detected and bypassed. |
+| 3 | **ffmpeg** | Installed via winget so MP3 input "just works". |
+| 4 | **VB-Audio Virtual Cable** | Downloaded over TLS-1.2 with retries, silent NSIS install — kernel audio driver. |
+| 5 | **OBS Studio + Virtual Camera** | Installed silently; DirectShow filter registered via `regsvr32`. No need to ever launch OBS. |
+| 6 | **Auto-resume** | A one-shot scheduled task `TeamsSimulatorSetupResume` is registered, **the VM reboots automatically**. |
+| 7 | **Resume after login** | Task fires at next logon (RunLevel `Highest`), creates `.venv`, pip-installs all deps, runs `verify.ps1`, prints a green **READY** banner with the exact device names — and unregisters itself. |
 
 Then in **Teams → Settings → Devices** pick:
 
 | | |
 | --- | --- |
-| **Microphone** | `CABLE Output (VB-Audio Virtual Cable)` |
-| **Camera** | `OBS Virtual Camera` |
+| 🎙️ **Microphone** | `CABLE Output (VB-Audio Virtual Cable)` |
+| 📷 **Camera**     | `OBS Virtual Camera` |
 
 …and start the simulator:
 
@@ -61,14 +53,32 @@ Then in **Teams → Settings → Devices** pick:
 C:\teams-simulator\.venv\Scripts\python.exe -m teams_simulator
 ```
 
-A small Tkinter window opens with the bundled `samples\demo_audio.wav` +
-`samples\demo_avatar.png` already wired up. Hit **▶ Start** and you are
-"in the meeting".
+A small Tkinter window opens, pre-wired with the bundled `samples\demo_audio.wav` + `samples\demo_avatar.png`. Hit **▶ Start** and you're in the meeting.
 
-### Manual / offline alternative
+---
 
-If you can't (or don't want to) reach raw.githubusercontent.com from
-the VM, do the same thing by hand:
+## 🧩 How it works
+
+<div align="center">
+
+<img src="assets/architecture.png" alt="Architecture: audio + image → Teams Simulator → CABLE Output + OBS Virtual Camera" width="100%" />
+
+</div>
+
+Two virtual Windows devices do the heavy lifting:
+
+| Device                 | Provided by                  | What it is                                                                  |
+| ---------------------- | ---------------------------- | --------------------------------------------------------------------------- |
+| `CABLE Input/Output`   | VB-Audio Virtual Cable       | A loopback audio driver. Anything we play to `CABLE Input` is captured by `CABLE Output`, which Teams picks as a microphone. |
+| `OBS Virtual Camera`   | OBS Studio's DirectShow filter | A virtual webcam. We push BGR frames via `pyvirtualcam`; OBS itself doesn't even need to be running. |
+
+The simulator coordinates both sides on a single timeline: it streams audio frame-accurately into `CABLE Input`, samples the RMS level, and draws an equalizer-style waveform overlay onto the avatar image so Teams participants see *"the avatar is talking now"*.
+
+---
+
+## 🛠️ Manual / offline install
+
+If you can't (or don't want to) reach `raw.githubusercontent.com` from the VM, do the same thing by hand:
 
 ```powershell
 # 1. copy the repo onto the VM (git clone, scp, ZIP, ...) and cd into it
@@ -86,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
 .\.venv\Scripts\python.exe -m teams_simulator
 ```
 
-## Using the simulator
+## 🎬 Using the simulator
 
 ### GUI
 
@@ -128,7 +138,7 @@ c.start()
 c.stop()
 ```
 
-## Repository layout
+## 📁 Repository layout
 
 ```
 teams-simulator/
@@ -146,8 +156,12 @@ teams-simulator/
 │   ├── demo_audio.wav           <- 6 s synthesised speech-like signal
 │   ├── demo_avatar.png          <- 1280x720 placeholder portrait
 │   └── README.md
+├── assets/
+│   ├── hero.png                 <- README banner
+│   └── architecture.png         <- README "How it works" diagram
 ├── scripts/
-│   └── generate_samples.py      <- regenerates the bundled samples
+│   ├── generate_samples.py      <- regenerates the bundled samples
+│   └── generate_hero.py         <- regenerates assets/*.png
 ├── src/teams_simulator/
 │   ├── __main__.py              <- python -m teams_simulator -> GUI
 │   ├── ui.py                    <- Tkinter window
@@ -165,7 +179,7 @@ teams-simulator/
 └── tests/                       <- pytest, no real devices required
 ```
 
-## Requirements
+## ✅ Requirements
 
 | Component | Why                                                                |
 | --- | --- |
@@ -179,7 +193,7 @@ teams-simulator/
 GPU is **not** required — both virtual devices are pure user-space
 software.
 
-## VM compatibility
+## 🖥️ VM compatibility
 
 | Hypervisor / cloud           | Verdict | Notes |
 | --- | --- | --- |
@@ -188,7 +202,7 @@ software.
 | **Hyper-V (Enhanced Session)** | ⚠️ OK | Standard session has no audio; enable Enhanced Session Mode. |
 | **Azure Windows IaaS VM**      | ✅ Recommended for shared demos | Use D4s_v3 or larger. **Do not** use Azure Virtual Desktop (AVD) — it redirects Teams media to the local client. |
 
-## Troubleshooting
+## 🩹 Troubleshooting
 
 <details>
 <summary><strong>Teams shows "Microphone not found"</strong></summary>
@@ -229,7 +243,7 @@ is talking", which is enough for most testing. See
 [`plan.md`](#) for Phase-2 ideas (Azure TTS Avatar, MuseTalk, MP4 loop).
 </details>
 
-## Development
+## 🧪 Development
 
 ```powershell
 # Install in editable mode with dev extras
@@ -242,7 +256,7 @@ is talking", which is enough for most testing. See
 .\.venv\Scripts\ruff check src tests
 ```
 
-## License & credits
+## 📜 License & credits
 
 * This project: **MIT** (see `LICENSE` if present).
 * **VB-Audio Virtual Cable** — donationware, redistributed installer
@@ -252,7 +266,7 @@ is talking", which is enough for most testing. See
 * **ffmpeg (Gyan.FFmpeg build)** — LGPL v2.1.
 * **pyvirtualcam** — GPL v2 (Windows backends use OBS / Unity Capture).
 
-## Roadmap (not in MVP)
+## 🚀 Roadmap (not in MVP)
 
 * TTS plugin (Azure AI Speech, OpenAI TTS, ElevenLabs) — generate audio
   from text live, no need to bring a WAV.
