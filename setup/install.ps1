@@ -1,64 +1,154 @@
-#Requires -RunAsAdministrator
+#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Bootstrap script for the Teams Simulator on a fresh Windows 10/11 VM.
+    Headless end-to-end installer for the Teams Simulator on a fresh
+    Windows 10/11 VM.
 
 .DESCRIPTION
-    Installs everything needed to run the simulator end-to-end:
-      * Python 3.11+        (via winget if missing)
-      * ffmpeg              (via winget; needed for MP3 decoding)
-      * VB-Audio Virtual Cable  (silent install; the virtual microphone)
-      * OBS Studio          (silent install via winget; provides the
-                             DirectShow Virtual Camera filter)
-    Then creates a Python venv inside the repo and installs all Python
-    dependencies from requirements.txt.
+    Installs everything required to run the simulator:
+      * Python 3.11+              (winget: Python.Python.3.11)
+      * ffmpeg                    (winget: Gyan.FFmpeg, for MP3 decoding)
+      * VB-Audio Virtual Cable    (download + silent NSIS install)
+      * OBS Studio                (winget: OBSProject.OBSStudio, ships
+                                   the DirectShow Virtual Camera filter)
+      * Project venv + pip deps   (.venv inside the repo)
 
-    A reboot may be required after installing VB-Cable; the script tells
-    you when. After the reboot, simply re-run this script — it skips
-    everything that's already in place.
+    The script is **idempotent**: anything already installed is detected
+    and skipped, so it is safe to re-run (e.g. after the post-VB-Cable
+    reboot).
 
-.PARAMETER SkipReboot
-    Skip the reboot prompt at the end (CI/automation use).
+    With -Auto it runs fully unattended: no prompts, auto-reboot when
+    VB-Cable was just installed, and an optional scheduled task that
+    resumes the script automatically after the reboot.
+
+.PARAMETER Auto
+    Fully unattended mode. Implies:
+      - no interactive prompts
+      - auto-reboot at the end if VB-Cable was just installed
+      - registers a one-shot scheduled task ("TeamsSimulatorSetupResume")
+        that re-runs this script after the reboot to finish + verify
+
+.PARAMETER NoReboot
+    Never reboot, even if VB-Cable installation needs it. The script
+    prints a warning and exits with code 2 in that case.
 
 .PARAMETER Force
-    Reinstall everything even if it's already present.
+    Reinstall everything even if already present.
+
+.PARAMETER DryRun
+    Log every action that would be taken, but do not actually run any
+    installer or modify the system. Useful for verification.
+
+.PARAMETER ContinueAfterReboot
+    Internal: set by the scheduled task that resumes the install after
+    a reboot. Triggers the post-reboot phase (deps + verify) and
+    deletes the task.
+
+.PARAMETER LogFile
+    Optional path to a log file. Defaults to setup\_logs\install-<timestamp>.log.
 
 .EXAMPLE
+    # Interactive install on a freshly-provisioned VM:
     powershell -ExecutionPolicy Bypass -File .\setup\install.ps1
+
+.EXAMPLE
+    # Fully unattended install (CI / automation / kiosk VM):
+    powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -Auto
+
+.EXAMPLE
+    # See what would happen without touching the system:
+    powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -DryRun
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipReboot,
-    [switch]$Force
+    [switch]$Auto,
+    [switch]$NoReboot,
+    [switch]$Force,
+    [switch]$DryRun,
+    [switch]$ContinueAfterReboot,
+    [string]$LogFile
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
+$ProgressPreference    = 'SilentlyContinue'
 
 # ---------------------------------------------------------------------------
-# Paths and constants
+# Paths / constants
 # ---------------------------------------------------------------------------
-$RepoRoot   = Split-Path -Parent $PSScriptRoot
+$RepoRoot    = Split-Path -Parent $PSScriptRoot
 $DownloadDir = Join-Path $PSScriptRoot '_downloads'
-$VenvPath   = Join-Path $RepoRoot '.venv'
+$LogDir      = Join-Path $PSScriptRoot '_logs'
+$VenvPath    = Join-Path $RepoRoot '.venv'
+$VenvPy      = Join-Path $VenvPath 'Scripts\python.exe'
+$ScriptPath  = $MyInvocation.MyCommand.Path
 
-$VBCableUrl = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
-$VBCableZip = Join-Path $DownloadDir 'VBCABLE_Driver_Pack45.zip'
-$VBCableDir = Join-Path $DownloadDir 'VBCABLE_Driver_Pack45'
+$VBCableUrl  = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
+$VBCableZip  = Join-Path $DownloadDir 'VBCABLE_Driver_Pack45.zip'
+$VBCableDir  = Join-Path $DownloadDir 'VBCABLE_Driver_Pack45'
+
+$ObsExe      = 'C:\Program Files\obs-studio\bin\64bit\obs64.exe'
+$ObsFilter   = 'C:\Program Files\obs-studio\data\obs-plugins\win-dshow\obs-virtualcam-module64.dll'
+
+$ResumeTaskName = 'TeamsSimulatorSetupResume'
+
+# winget exit codes that mean "this is fine"
+$WingetOk    = 0
+$WingetNoUpd = -1978335189   # APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE
+
+# State flags filled in during the run
+$script:RebootRequired = $false
+$script:DryRun         = [bool]$DryRun
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Logging
 # ---------------------------------------------------------------------------
-function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Ok  ([string]$msg) { Write-Host "    [OK]  $msg" -ForegroundColor Green }
-function Write-Skip([string]$msg) { Write-Host "    [--] $msg" -ForegroundColor DarkGray }
-function Write-Warn2([string]$msg) { Write-Host "    [!!]  $msg" -ForegroundColor Yellow }
+if (-not $LogFile) {
+    if (-not (Test-Path $LogDir)) {
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    }
+    $LogFile = Join-Path $LogDir ("install-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+}
 
+function Write-Journal {
+    param([string]$Level, [string]$Message, [ConsoleColor]$Color = 'Gray')
+    $ts = Get-Date -Format 'HH:mm:ss'
+    $line = "[$ts] [$Level] $Message"
+    Write-Host $line -ForegroundColor $Color
+    try { Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue }
+    catch { $null = $_ } # logging failures must never break the installer
+}
+function Write-Step ([string]$m) { Write-Journal 'STEP' $m  Cyan }
+function Write-Ok   ([string]$m) { Write-Journal ' OK ' $m  Green }
+function Write-Skip ([string]$m) { Write-Journal 'SKIP' $m  DarkGray }
+function Write-Warn2([string]$m) { Write-Journal 'WARN' $m  Yellow }
+function Write-ErrL ([string]$m) { Write-Journal ' ERR' $m  Red }
+function Write-Dry  ([string]$m) { Write-Journal 'DRY ' $m  Magenta }
+
+function Invoke-Action {
+    <#
+        Runs a script block normally, OR logs it without executing
+        when -DryRun is active.
+    #>
+    param(
+        [string]$Description,
+        [scriptblock]$Action
+    )
+    if ($script:DryRun) {
+        Write-Dry $Description
+        return
+    }
+    & $Action
+}
+
+# ---------------------------------------------------------------------------
+# Pre-flight
+# ---------------------------------------------------------------------------
 function Assert-Admin {
-    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($script:DryRun) { return }
+    $current   = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($current)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "This script must be run as Administrator. Right-click PowerShell -> Run as administrator."
+        throw "This script must be run as Administrator. Right-click PowerShell -> Run as administrator. (Use -DryRun to inspect what would happen without admin.)"
     }
 }
 
@@ -66,188 +156,391 @@ function Test-CommandAvailable([string]$name) {
     $null -ne (Get-Command $name -ErrorAction SilentlyContinue)
 }
 
-function Invoke-Winget([string[]]$args) {
-    & winget @args --accept-source-agreements --accept-package-agreements --silent
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
-        # -1978335189 = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (already installed)
-        throw "winget failed with exit code $LASTEXITCODE"
-    }
+function Update-SessionPath {
+    $env:Path = `
+        [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + `
+        [Environment]::GetEnvironmentVariable('Path','User')
 }
 
-function Test-DeviceInstalled([string]$nameLike) {
-    $devices = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -like "*$nameLike*" }
-    return ($null -ne $devices -and $devices.Count -gt 0)
+function Test-VBCableInstalled {
+    # The driver registers a sound device whose FriendlyName starts with
+    # "CABLE Input" / "CABLE Output". Get-PnpDevice surfaces these as
+    # AudioEndpoint or MEDIA class devices.
+    $hits = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+        $_.FriendlyName -like '*VB-Audio*' -or $_.FriendlyName -like 'CABLE *'
+    }
+    return ($null -ne $hits -and $hits.Count -gt 0)
+}
+
+function Test-ObsVirtualCamRegistered {
+    # The OBS Virtual Camera registers as a DirectShow source named
+    # "OBS Virtual Camera" under HKLM\SOFTWARE\Classes\CLSID. Easiest
+    # cross-version probe: look for the well-known CLSID key.
+    $clsid = '{A3FCE0F5-3493-419F-958A-ABA1250EC20B}'   # OBS Virtual Camera (since OBS 28+)
+    $paths = @(
+        "HKLM:\SOFTWARE\Classes\CLSID\$clsid",
+        "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$clsid"
+    )
+    foreach ($p in $paths) { if (Test-Path $p) { return $true } }
+    return $false
+}
+
+# ---------------------------------------------------------------------------
+# winget helpers
+# ---------------------------------------------------------------------------
+function Test-Winget {
+    if (-not (Test-CommandAvailable 'winget')) { return $false }
+    try {
+        $null = & winget --version 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+
+function Invoke-WingetInstall {
+    param(
+        [Parameter(Mandatory)] [string]$Id,
+        [int]$Retries = 2
+    )
+    if (-not (Test-Winget)) {
+        throw "winget is unavailable. On Windows 10 install 'App Installer' from the Microsoft Store first."
+    }
+    for ($i = 0; $i -le $Retries; $i++) {
+        Write-Step "winget install --id $Id (attempt $($i+1)/$($Retries+1))"
+        if ($script:DryRun) {
+            Write-Dry "would run: winget install --id $Id -e --silent --accept-source-agreements --accept-package-agreements"
+            return
+        }
+        & winget install --id $Id -e --silent `
+            --accept-source-agreements --accept-package-agreements
+        $code = $LASTEXITCODE
+        if ($code -eq $WingetOk -or $code -eq $WingetNoUpd) {
+            Write-Ok "winget: $Id (exit $code)"
+            return
+        }
+        Write-Warn2 "winget exit $code for $Id; retrying after 5s"
+        Start-Sleep -Seconds 5
+    }
+    throw "winget install failed for $Id (last exit code $LASTEXITCODE)"
 }
 
 # ---------------------------------------------------------------------------
 # Steps
 # ---------------------------------------------------------------------------
 function Install-Python {
-    Write-Step "Checking Python"
-    if ((Test-CommandAvailable 'python') -and -not $Force) {
-        $ver = & python --version 2>&1
-        Write-Ok "Found $ver"
-        return
+    Write-Step 'Python 3.11+'
+    if (-not $Force -and (Test-CommandAvailable 'python')) {
+        $ver = (& python --version 2>&1).ToString().Trim()
+        if ($ver -match 'Python\s+3\.(1[0-9]|[2-9][0-9])') {
+            Write-Ok "found $ver"
+            return
+        }
+        Write-Warn2 "found $ver - too old, installing 3.11"
     }
-    Write-Step "Installing Python 3.11 via winget"
-    if (-not (Test-CommandAvailable 'winget')) {
-        throw "winget is not available. Install 'App Installer' from the Microsoft Store and re-run."
+    Invoke-WingetInstall -Id 'Python.Python.3.11'
+    Update-SessionPath
+    if (-not $script:DryRun -and -not (Test-CommandAvailable 'python')) {
+        throw "Python install completed but 'python' is not on PATH. Open a fresh shell and re-run this script."
     }
-    Invoke-Winget @('install','--id','Python.Python.3.11','-e')
-    # Refresh PATH for the current session.
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-    if (-not (Test-CommandAvailable 'python')) {
-        throw "Python install completed but 'python' is still not on PATH. Open a new shell and re-run."
+    if (-not $script:DryRun) {
+        Write-Ok ("python: " + (& python --version 2>&1))
     }
-    Write-Ok "Python installed: $(& python --version 2>&1)"
 }
 
 function Install-Ffmpeg {
-    Write-Step "Checking ffmpeg"
-    if ((Test-CommandAvailable 'ffmpeg') -and -not $Force) {
-        Write-Ok "ffmpeg already on PATH"
+    Write-Step 'ffmpeg (MP3 decoding)'
+    if (-not $Force -and (Test-CommandAvailable 'ffmpeg')) {
+        Write-Ok 'ffmpeg already on PATH'
         return
     }
-    Write-Step "Installing ffmpeg via winget (Gyan.FFmpeg)"
-    Invoke-Winget @('install','--id','Gyan.FFmpeg','-e')
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-    Write-Ok "ffmpeg installed"
+    Invoke-WingetInstall -Id 'Gyan.FFmpeg'
+    Update-SessionPath
+    if (-not $script:DryRun) {
+        if (Test-CommandAvailable 'ffmpeg') { Write-Ok 'ffmpeg installed' }
+        else { Write-Warn2 'ffmpeg not on PATH yet (a new shell may be required)' }
+    }
 }
 
 function Install-VBCable {
-    Write-Step "Checking VB-Audio Virtual Cable"
-    if ((Test-DeviceInstalled 'VB-Audio') -and -not $Force) {
-        Write-Ok "VB-Cable driver already present"
+    <#
+        Returns $true if VB-Cable was just installed (=> reboot needed).
+        Returns $false if it was already there.
+    #>
+    Write-Step 'VB-Audio Virtual Cable'
+    if (-not $Force -and (Test-VBCableInstalled)) {
+        Write-Ok 'VB-Cable driver already present'
         return $false
     }
 
-    New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null
-
-    if (-not (Test-Path $VBCableZip) -or $Force) {
-        Write-Step "Downloading VB-Cable from vb-audio.com"
-        Invoke-WebRequest -Uri $VBCableUrl -OutFile $VBCableZip -UseBasicParsing
+    Invoke-Action "create download dir $DownloadDir" {
+        New-Item -ItemType Directory -Path $DownloadDir -Force | Out-Null
     }
 
-    if (Test-Path $VBCableDir) { Remove-Item $VBCableDir -Recurse -Force }
-    Write-Step "Extracting installer"
-    Expand-Archive -Path $VBCableZip -DestinationPath $VBCableDir -Force
+    if ($Force -or -not (Test-Path $VBCableZip)) {
+        Write-Step "downloading $VBCableUrl"
+        Invoke-Action "Invoke-WebRequest $VBCableUrl -> $VBCableZip" {
+            Invoke-WebRequest -Uri $VBCableUrl -OutFile $VBCableZip -UseBasicParsing
+            Unblock-File -Path $VBCableZip -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Skip "already downloaded: $VBCableZip"
+    }
+
+    Invoke-Action "extract $VBCableZip -> $VBCableDir" {
+        if (Test-Path $VBCableDir) { Remove-Item $VBCableDir -Recurse -Force }
+        Expand-Archive -Path $VBCableZip -DestinationPath $VBCableDir -Force
+    }
 
     $setupExe = Join-Path $VBCableDir 'VBCABLE_Setup_x64.exe'
-    if (-not (Test-Path $setupExe)) {
+    if (-not $script:DryRun -and -not (Test-Path $setupExe)) {
         throw "Could not find VBCABLE_Setup_x64.exe in extracted archive at $VBCableDir"
     }
 
-    Write-Step "Running VB-Cable installer (silent)"
-    # The VB-Cable installer accepts -i for install; '-h' for headless. Some
-    # versions only accept '/S' (NSIS). We try both conservatively.
-    $proc = Start-Process -FilePath $setupExe -ArgumentList '-i','-h' -Wait -PassThru
-    if ($proc.ExitCode -ne 0) {
-        Write-Warn2 "First install attempt returned exit code $($proc.ExitCode); retrying with /S"
-        $proc = Start-Process -FilePath $setupExe -ArgumentList '/S' -Wait -PassThru
-        if ($proc.ExitCode -ne 0) {
-            throw "VB-Cable installer failed with exit code $($proc.ExitCode)"
+    # The VB-Cable installer is a custom (NSIS-based) executable. Tested
+    # silent flags across Driver Pack 43..45:
+    #   -i  install
+    #   -h  hidden (no UI)
+    # Some older variants honour /S as a generic NSIS silent flag.
+    $argSets = @(
+        @('-i','-h'),
+        @('/S')
+    )
+
+    $installed = $false
+    foreach ($a in $argSets) {
+        Write-Step "running VB-Cable installer: $($a -join ' ')"
+        if ($script:DryRun) {
+            Write-Dry "would run: $setupExe $($a -join ' ')"
+            $installed = $true
+            break
         }
+        $proc = Start-Process -FilePath $setupExe -ArgumentList $a -Wait -PassThru -ErrorAction SilentlyContinue
+        if ($null -ne $proc -and $proc.ExitCode -eq 0) {
+            $installed = $true
+            break
+        }
+        Write-Warn2 "exit code $($proc.ExitCode); trying next argument set"
     }
-    Write-Ok "VB-Cable installed (a reboot is recommended)"
+
+    if (-not $installed) {
+        throw "VB-Cable installer failed for every known argument combination."
+    }
+
+    Write-Ok 'VB-Cable installed (reboot required to load driver)'
+    $script:RebootRequired = $true
     return $true
 }
 
 function Install-Obs {
-    Write-Step "Checking OBS Studio"
-    $obsExe = 'C:\Program Files\obs-studio\bin\64bit\obs64.exe'
-    if ((Test-Path $obsExe) -and -not $Force) {
-        Write-Ok "OBS Studio already installed"
+    Write-Step 'OBS Studio (provides Virtual Camera DirectShow filter)'
+    if (-not $Force -and (Test-Path $ObsExe)) {
+        Write-Ok 'OBS Studio already installed'
     } else {
-        Write-Step "Installing OBS Studio via winget"
-        Invoke-Winget @('install','--id','OBSProject.OBSStudio','-e')
-        if (-not (Test-Path $obsExe)) {
-            throw "OBS install completed but obs64.exe not found at expected path"
+        Invoke-WingetInstall -Id 'OBSProject.OBSStudio'
+        if (-not $script:DryRun -and -not (Test-Path $ObsExe)) {
+            throw "OBS install completed but obs64.exe not found at $ObsExe"
         }
-        Write-Ok "OBS Studio installed"
     }
 
-    # Register the DirectShow filter by launching OBS once. obs-studio
-    # registers the filter on first run, then it stays registered even
-    # when OBS isn't running.
-    $filterDll = 'C:\Program Files\obs-studio\data\obs-plugins\win-dshow\obs-virtualcam-module64.dll'
-    if (Test-Path $filterDll) {
-        Write-Step "Registering OBS Virtual Camera DirectShow filter"
-        try {
-            & regsvr32.exe /s $filterDll
-            Write-Ok "DirectShow filter registered"
-        } catch {
-            Write-Warn2 "regsvr32 failed: $_  (will try by launching OBS once)"
-            Start-Process -FilePath $obsExe -ArgumentList '--minimize-to-tray','--disable-shutdown-check' -PassThru | Out-Null
+    if (-not $Force -and (Test-ObsVirtualCamRegistered)) {
+        Write-Ok 'OBS Virtual Camera DirectShow filter already registered'
+        return
+    }
+
+    if (-not $script:DryRun -and -not (Test-Path $ObsFilter)) {
+        Write-Warn2 "obs-virtualcam-module64.dll not found; trying first-launch self-registration"
+        Invoke-Action "launch+kill OBS once for filter registration" {
+            $p = Start-Process -FilePath $ObsExe `
+                -ArgumentList '--minimize-to-tray','--disable-shutdown-check' -PassThru
             Start-Sleep -Seconds 8
-            Get-Process obs64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            if (-not $p.HasExited) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
         }
-    } else {
-        Write-Warn2 "obs-virtualcam-module64.dll not found; launching OBS once to self-register"
-        Start-Process -FilePath $obsExe -ArgumentList '--minimize-to-tray','--disable-shutdown-check' -PassThru | Out-Null
-        Start-Sleep -Seconds 8
-        Get-Process obs64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    Write-Step "registering DirectShow filter via regsvr32"
+    Invoke-Action "regsvr32 /s $ObsFilter" {
+        & regsvr32.exe /s "$ObsFilter"
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
+            Write-Warn2 "regsvr32 returned $code; falling back to OBS first-launch"
+            $p = Start-Process -FilePath $ObsExe `
+                -ArgumentList '--minimize-to-tray','--disable-shutdown-check' -PassThru
+            Start-Sleep -Seconds 8
+            if (-not $p.HasExited) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    if (-not $script:DryRun) {
+        if (Test-ObsVirtualCamRegistered) { Write-Ok 'OBS Virtual Camera filter registered' }
+        else { Write-Warn2 'OBS Virtual Camera filter not yet visible in registry; may need a reboot' }
     }
 }
 
 function Install-PythonDeps {
-    Write-Step "Creating Python virtual environment in $VenvPath"
-    if (-not (Test-Path $VenvPath) -or $Force) {
-        if (Test-Path $VenvPath) { Remove-Item $VenvPath -Recurse -Force }
-        & python -m venv $VenvPath
+    Write-Step "creating Python venv at $VenvPath"
+    if (-not $Force -and (Test-Path $VenvPy)) {
+        Write-Ok 'venv already exists'
     } else {
-        Write-Ok "venv already exists"
+        Invoke-Action "create venv: python -m venv $VenvPath" {
+            if (Test-Path $VenvPath) { Remove-Item $VenvPath -Recurse -Force }
+            & python -m venv $VenvPath
+            if ($LASTEXITCODE -ne 0) { throw "python -m venv failed (exit $LASTEXITCODE)" }
+        }
     }
 
-    $venvPy = Join-Path $VenvPath 'Scripts\python.exe'
-    if (-not (Test-Path $venvPy)) {
-        throw "venv python not found at $venvPy"
+    if (-not $script:DryRun -and -not (Test-Path $VenvPy)) {
+        throw "venv python not found at $VenvPy"
     }
 
-    Write-Step "Upgrading pip"
-    & $venvPy -m pip install --quiet --upgrade pip
+    Invoke-Action "upgrade pip" {
+        & $VenvPy -m pip install --quiet --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed (exit $LASTEXITCODE)" }
+    }
 
-    Write-Step "Installing Python dependencies"
     $req = Join-Path $RepoRoot 'requirements.txt'
-    & $venvPy -m pip install --quiet -r $req
+    Invoke-Action "pip install -r $req" {
+        & $VenvPy -m pip install --quiet -r $req
+        if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed (exit $LASTEXITCODE)" }
+    }
 
-    Write-Step "Installing teams-simulator (editable)"
-    & $venvPy -m pip install --quiet -e $RepoRoot
+    Invoke-Action "pip install -e $RepoRoot" {
+        & $VenvPy -m pip install --quiet -e $RepoRoot
+        if ($LASTEXITCODE -ne 0) { throw "pip install -e . failed (exit $LASTEXITCODE)" }
+    }
 
     Write-Ok "Python environment ready: $VenvPath"
+}
+
+# ---------------------------------------------------------------------------
+# Resume-after-reboot scheduling
+# ---------------------------------------------------------------------------
+function Register-ResumeTask {
+    Write-Step "registering scheduled task '$ResumeTaskName' to resume after reboot"
+    if ($script:DryRun) {
+        Write-Dry "would create scheduled task '$ResumeTaskName' running this script with -ContinueAfterReboot at next user logon (highest privileges)"
+        return
+    }
+
+    # ContinueAfterReboot phase only needs to: install deps + verify.
+    # Run as the user who is logging in, with highest privileges.
+    $runUser  = "$env:USERDOMAIN\$env:USERNAME"
+    $argLine  = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ContinueAfterReboot"
+    $action   = New-ScheduledTaskAction   -Execute 'powershell.exe' -Argument $argLine
+    $trigger  = New-ScheduledTaskTrigger  -AtLogOn -User $runUser
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                                              -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    $principal = New-ScheduledTaskPrincipal -UserId $runUser -RunLevel Highest -LogonType Interactive
+
+    Register-ScheduledTask -TaskName $ResumeTaskName -Action $action -Trigger $trigger `
+        -Settings $settings -Principal $principal -Force | Out-Null
+    Write-Ok "scheduled task registered (will fire on next logon for $runUser)"
+}
+
+function Unregister-ResumeTask {
+    if (Get-ScheduledTask -TaskName $ResumeTaskName -ErrorAction SilentlyContinue) {
+        Write-Step "removing scheduled resume task"
+        if (-not $script:DryRun) {
+            Unregister-ScheduledTask -TaskName $ResumeTaskName -Confirm:$false
+        }
+        Write-Ok "resume task removed"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Verify (calls verify.ps1)
+# ---------------------------------------------------------------------------
+function Invoke-Verify {
+    $verify = Join-Path $PSScriptRoot 'verify.ps1'
+    if (-not (Test-Path $verify)) { return }
+    Write-Step "running verify.ps1"
+    if ($script:DryRun) {
+        Write-Dry "would run: powershell -File $verify"
+        return
+    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $verify
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 "verify.ps1 exited with code $LASTEXITCODE - some checks failed (see above)"
+    } else {
+        Write-Ok "verify.ps1 reports all checks green"
+    }
 }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "Teams Simulator Setup" -ForegroundColor Magenta
-Write-Host "=====================" -ForegroundColor Magenta
+Write-Host "Teams Simulator - Headless Install" -ForegroundColor Magenta
+Write-Host "===================================" -ForegroundColor Magenta
+Write-Journal 'INFO' "log file: $LogFile" Gray
+Write-Journal 'INFO' "mode: $(if($Auto){'Auto '}else{''})$(if($NoReboot){'NoReboot '}else{''})$(if($Force){'Force '}else{''})$(if($DryRun){'DryRun '}else{''})$(if($ContinueAfterReboot){'ContinueAfterReboot'}else{''})" Gray
 
 Assert-Admin
 
+if ($ContinueAfterReboot) {
+    # Post-reboot phase: only deps + verify, then clean up.
+    Write-Step "post-reboot phase"
+    Update-SessionPath
+    Install-PythonDeps
+    Invoke-Verify
+    Unregister-ResumeTask
+    Write-Host ""
+    Write-Host "Setup complete (post-reboot phase)." -ForegroundColor Magenta
+    return
+}
+
 Install-Python
 Install-Ffmpeg
-$rebootNeeded = Install-VBCable
+[void](Install-VBCable)
 Install-Obs
-Install-PythonDeps
+
+if ($script:RebootRequired) {
+    # We schedule deps + verify to run after the reboot if -Auto was
+    # requested. Without -Auto the user re-runs install.ps1 themselves.
+    if ($Auto) {
+        Register-ResumeTask
+    }
+} else {
+    Install-PythonDeps
+    Invoke-Verify
+}
 
 Write-Host ""
-Write-Host "Setup finished." -ForegroundColor Magenta
+Write-Host "Setup phase done." -ForegroundColor Magenta
 Write-Host "Next steps:" -ForegroundColor Magenta
-Write-Host "  1. Verify devices:"
-Write-Host "        powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1" -ForegroundColor Gray
-Write-Host "  2. In Teams choose:"
-Write-Host "        Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
-Write-Host "        Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
-Write-Host "  3. Start the UI:"
-Write-Host "        .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
+Write-Host "  1. In Teams set:" -ForegroundColor Gray
+Write-Host "       Microphone : 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor Gray
+Write-Host "       Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
+Write-Host "  2. Start the simulator:" -ForegroundColor Gray
+Write-Host "       .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
 Write-Host ""
 
-if ($rebootNeeded -and -not $SkipReboot) {
+if ($script:RebootRequired) {
+    if ($NoReboot) {
+        Write-Warn2 "VB-Cable was just installed - reboot required, but -NoReboot was passed."
+        Write-Warn2 "Reboot manually, then re-run: .\setup\install.ps1"
+        exit 2
+    }
+    if ($Auto) {
+        Write-Warn2 "Rebooting now (auto mode). Resume task will continue setup after logon."
+        if (-not $script:DryRun) {
+            Start-Sleep -Seconds 5
+            Restart-Computer -Force
+        } else {
+            Write-Dry "would call Restart-Computer -Force"
+        }
+        return
+    }
     $resp = Read-Host "VB-Cable was just installed. Reboot now? [y/N]"
     if ($resp -match '^[yY]') {
         Restart-Computer -Force
     } else {
-        Write-Warn2 "Please reboot before running the simulator (Teams won't see the mic until then)."
+        Write-Warn2 "Please reboot before running the simulator (Teams will not see the mic until then)."
+        exit 2
     }
 }
+
+exit 0

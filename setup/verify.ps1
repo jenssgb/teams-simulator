@@ -2,14 +2,17 @@
 <#
 .SYNOPSIS
     Verify that the Teams Simulator is correctly installed on this VM.
+
 .DESCRIPTION
-    Reports OK / FAIL for each prerequisite:
-      * Python on PATH
-      * Project venv exists
-      * Required Python packages importable
-      * VB-Audio Virtual Cable devices visible
-      * OBS Virtual Camera DirectShow filter usable
+    Reports OK / FAIL for each prerequisite. On the last line prints a
+    one-line "READY" banner if Teams will see both devices, otherwise
+    explains exactly what is still missing.
+
     Exits with code 0 if everything is fine, 1 otherwise.
+
+.PARAMETER Verbose
+    Print extra information (full device listings, signature data).
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
 #>
@@ -24,16 +27,20 @@ $VenvPy   = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 $ok   = 0
 $fail = 0
 
-function Check([string]$label, [scriptblock]$probe) {
-    Write-Host -NoNewline ("  {0,-42}" -f $label)
+function Check {
+    param([string]$Label, [scriptblock]$Probe)
+    Write-Host -NoNewline ("  {0,-46}" -f $Label)
     try {
-        & $probe
+        $info = & $Probe
         Write-Host '  [OK]' -ForegroundColor Green
+        if ($info) { Write-Host ("      $info") -ForegroundColor DarkGray }
         $script:ok++
+        return $true
     } catch {
         Write-Host '  [FAIL]' -ForegroundColor Red
         Write-Host ("      $_") -ForegroundColor DarkRed
         $script:fail++
+        return $false
     }
 }
 
@@ -41,56 +48,84 @@ Write-Host ""
 Write-Host "Teams Simulator Verification" -ForegroundColor Magenta
 Write-Host "============================" -ForegroundColor Magenta
 
-Check "Python launcher available" {
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "python not on PATH" }
-}
+# -- system tools --
+Check "python on PATH" {
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $cmd) { throw "python not on PATH" }
+    return (& python --version 2>&1)
+} | Out-Null
 
-Check "ffmpeg available (for MP3 decoding)" {
-    if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-        throw "ffmpeg not on PATH (only WAV/FLAC will work without it)"
-    }
-}
+Check "ffmpeg on PATH (MP3 decoding)" {
+    $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    if (-not $cmd) { throw "ffmpeg missing - WAV/FLAC will work, MP3 will not" }
+    return ($cmd.Source)
+} | Out-Null
 
-Check "Project venv at $VenvPy" {
+# -- venv + project --
+$venvOk = Check "project venv at .venv\Scripts\python.exe" {
     if (-not (Test-Path $VenvPy)) { throw "venv missing - run setup\install.ps1 first" }
+    return (& $VenvPy --version 2>&1)
 }
 
-if (Test-Path $VenvPy) {
+if ($venvOk) {
     Check "Python deps importable" {
-        & $VenvPy -c "import sounddevice, soundfile, numpy, scipy, cv2, pyvirtualcam, pydub" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "import failed (exit $LASTEXITCODE)" }
-    }
+        $out = & $VenvPy -c "import sounddevice, soundfile, numpy, scipy, cv2, pyvirtualcam, pydub; print('ok')" 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "import failed: $out" }
+    } | Out-Null
 
     Check "teams_simulator package importable" {
-        & $VenvPy -c "import teams_simulator; print(teams_simulator.__version__)" 2>&1 | Out-Null
+        $ver = & $VenvPy -c "import teams_simulator; print(teams_simulator.__version__)" 2>&1
         if ($LASTEXITCODE -ne 0) { throw "package not installed; run pip install -e . in venv" }
-    }
+        return "version $ver"
+    } | Out-Null
 
-    Check "VB-Cable 'CABLE Input' device visible" {
-        & $VenvPy -c "from teams_simulator.devices import find_cable_input; find_cable_input()" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "VB-Cable missing; rerun setup\install.ps1 and reboot" }
-    }
+    Check "VB-Cable 'CABLE Input' visible (used as audio sink)" {
+        $name = & $VenvPy -c "from teams_simulator.devices import find_cable_input; print(find_cable_input())" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "VB-Cable missing; install + reboot. Detail: $name"
+        }
+        return $name
+    } | Out-Null
 
-    Check "VB-Cable 'CABLE Output' device visible" {
-        & $VenvPy -c "from teams_simulator.devices import find_cable_output; assert find_cable_output() is not None, 'missing'" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Teams will not see a microphone; reinstall VB-Cable" }
-    }
+    Check "VB-Cable 'CABLE Output' visible (used as Teams microphone)" {
+        $name = & $VenvPy -c "from teams_simulator.devices import find_cable_output; n = find_cable_output(); print(n if n else 'NONE')" 2>&1
+        if ($LASTEXITCODE -ne 0 -or $name -eq 'NONE') {
+            throw "Teams will not see a microphone; reinstall VB-Cable"
+        }
+        return $name
+    } | Out-Null
 
     Check "OBS Virtual Camera DirectShow filter usable" {
-        & $VenvPy -c "from teams_simulator.devices import check_obs_virtual_camera; check_obs_virtual_camera()" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "OBS Virtual Camera not registered; install OBS Studio and start it once" }
-    }
+        $msg = & $VenvPy -c "from teams_simulator.devices import check_obs_virtual_camera; check_obs_virtual_camera(); print('ok')" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "OBS Virtual Camera not registered ($msg). Install OBS Studio (winget install OBSProject.OBSStudio) or rerun setup\install.ps1"
+        }
+    } | Out-Null
 }
 
+# -- OBS DLL signature, informational --
+$obsDll = 'C:\Program Files\obs-studio\data\obs-plugins\win-dshow\obs-virtualcam-module64.dll'
+if (Test-Path $obsDll) {
+    Check "OBS Virtual Camera DLL Authenticode signature" {
+        $sig = Get-AuthenticodeSignature $obsDll
+        if ($sig.Status -ne 'Valid') { throw "signature status: $($sig.Status)" }
+        return ($sig.SignerCertificate.Subject -replace ',.*$', '')
+    } | Out-Null
+}
+
+# -- summary --
 Write-Host ""
 if ($fail -eq 0) {
     Write-Host "All checks passed ($ok / $($ok + $fail))." -ForegroundColor Green
     Write-Host ""
-    Write-Host "Next: in Teams pick 'CABLE Output' as mic and 'OBS Virtual Camera' as camera, then" -ForegroundColor Gray
-    Write-Host "  .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor Gray
+    Write-Host "READY: in Teams pick" -ForegroundColor Green
+    Write-Host "   Microphone -> 'CABLE Output (VB-Audio Virtual Cable)'" -ForegroundColor White
+    Write-Host "   Camera     -> 'OBS Virtual Camera'" -ForegroundColor White
+    Write-Host "Then:" -ForegroundColor Green
+    Write-Host "   .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor White
     exit 0
 } else {
     Write-Host "Verification failed: $fail failure(s), $ok passed." -ForegroundColor Red
-    Write-Host "Re-run setup\install.ps1 (as Administrator) to fix." -ForegroundColor Yellow
+    Write-Host "Re-run setup\install.ps1 (as Administrator) to fix - it is idempotent." -ForegroundColor Yellow
     exit 1
 }

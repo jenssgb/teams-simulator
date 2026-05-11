@@ -39,16 +39,21 @@ participants see "the avatar is talking now".
 git clone <repo-url> C:\teams-simulator
 cd C:\teams-simulator
 
-# 2. Bootstrap the VM (as Administrator)
-powershell -ExecutionPolicy Bypass -File .\setup\install.ps1
-#   - Installs Python 3.11 (winget)
-#   - Installs ffmpeg                (winget; needed for MP3)
-#   - Installs VB-Audio Virtual Cable (silent)
-#   - Installs OBS Studio             (winget) and registers its DirectShow filter
-#   - Creates .venv and pip-installs everything
-# Reboot if prompted (VB-Cable is a kernel driver).
+# 2. Bootstrap the VM (elevated PowerShell)
 
-# 3. Verify the wiring
+# Option A - fully unattended (auto-reboot, scheduled task continues setup):
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -Auto
+
+# Option B - interactive:
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1
+#   -> Installs Python 3.11 (winget) + ffmpeg + VB-Audio Virtual Cable
+#      + OBS Studio (winget, registers DirectShow filter) + .venv + deps
+#   -> Asks at the end whether to reboot (VB-Cable is a kernel driver).
+
+# Optional - dry run (no admin needed, modifies nothing, prints the plan):
+powershell -ExecutionPolicy Bypass -File .\setup\install.ps1 -DryRun
+
+# 3. After reboot: verify the wiring
 powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
 
 # 4. In Teams (or Teams Web in Edge):
@@ -59,6 +64,11 @@ powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
 # 5. Launch the GUI
 .\.venv\Scripts\python.exe -m teams_simulator
 ```
+
+> **One-paste lazy mode** (after you publish the repo):
+> `iex (irm 'https://raw.githubusercontent.com/<owner>/teams-simulator/main/setup/bootstrap.ps1')`
+> clones the repo to `C:\teams-simulator` and runs `install.ps1 -Auto`.
+>
 
 ## Using the simulator
 
@@ -110,8 +120,10 @@ teams-simulator/
 ├── pyproject.toml               <- packaging + entry points
 ├── requirements.txt             <- pinned runtime deps
 ├── setup/                       <- VM bootstrap PowerShell scripts
-│   ├── install.ps1              <- one-shot install (admin)
-│   ├── verify.ps1               <- self-test
+│   ├── install.ps1              <- headless installer (-Auto / -DryRun / -NoReboot / -Force)
+│   ├── verify.ps1               <- end-to-end self-test (devices, deps)
+│   ├── dryrun.ps1               <- run on the dev box; verifies install.ps1 without installing
+│   ├── bootstrap.ps1            <- one-paste clone+install (irm | iex friendly)
 │   ├── uninstall.ps1
 │   └── README.md
 ├── samples/
