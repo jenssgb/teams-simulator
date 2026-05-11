@@ -76,7 +76,19 @@ class App:
 
         # State -----------------------------------------------------------
         self.controller: Optional[SimulatorController] = None
-        self.audio_path = tk.StringVar(value=str(DEMO_AUDIO) if DEMO_AUDIO.exists() else "")
+        # Bundled English speech samples for one-click testing.
+        self._speech_samples: list[tuple[str, Path]] = self._discover_speech_samples()
+        default_audio: str
+        if self._speech_samples:
+            default_audio = str(self._speech_samples[0][1])
+        elif DEMO_AUDIO.exists():
+            default_audio = str(DEMO_AUDIO)
+        else:
+            default_audio = ""
+        self.audio_path = tk.StringVar(value=default_audio)
+        self.sample_var = tk.StringVar(
+            value=self._speech_samples[0][0] if self._speech_samples else ""
+        )
 
         # Discover bundled avatars first so we can pre-select one as the
         # default image source.
@@ -158,13 +170,15 @@ class App:
 
         # Avatar dropdown + preview. Only built when there is at least one
         # bundled avatar — otherwise the panel collapses cleanly.
+        next_row = 0
         if self._avatars:
-            self._build_avatar_row(files_frame, row=0)
-            audio_row = 1
-            file_row = 2
-        else:
-            audio_row = 0
-            file_row = 1
+            self._build_avatar_row(files_frame, row=next_row)
+            next_row += 1
+        if self._speech_samples:
+            self._build_sample_row(files_frame, row=next_row)
+            next_row += 1
+        audio_row = next_row
+        file_row = next_row + 1
 
         self._build_file_row(files_frame, audio_row, "Audio file:", self.audio_path,
                              ("Audio", "*.wav *.flac *.ogg *.mp3 *.aiff"))
@@ -284,6 +298,52 @@ class App:
             command=lambda v=var, f=filetypes: self._pick_file(v, f),
         ).grid(row=row, column=2, padx=4, pady=4)
         parent.columnconfigure(1, weight=1)
+
+    @staticmethod
+    def _discover_speech_samples() -> list[tuple[str, Path]]:
+        """Return ``[(label, path), ...]`` for every bundled English sample.
+
+        Filenames are expected to look like
+        ``sample_<n>_<title-with-underscores>.mp3`` and the human label
+        is reconstructed from the filename.
+        """
+        out: list[tuple[str, Path]] = []
+        if not SAMPLES_DIR.exists():
+            return out
+        for path in sorted(SAMPLES_DIR.glob("sample_*.mp3")):
+            stem = path.stem
+            parts = stem.split("_", 2)
+            if len(parts) >= 3 and parts[0] == "sample":
+                label = f"{parts[1]}. {parts[2].replace('_', ' ').title()}"
+            else:
+                label = stem
+            out.append((label, path))
+        return out
+
+    def _build_sample_row(self, parent: ttk.LabelFrame, row: int) -> None:
+        ttk.Label(parent, text="Bundled sample:").grid(
+            row=row, column=0, padx=8, pady=4, sticky="e"
+        )
+        combo = ttk.Combobox(
+            parent,
+            textvariable=self.sample_var,
+            values=[label for label, _ in self._speech_samples],
+            state="readonly",
+            width=58,
+        )
+        combo.grid(row=row, column=1, padx=4, pady=4, sticky="we")
+        combo.bind("<<ComboboxSelected>>", self._on_sample_chosen)
+        ttk.Label(parent, text="(English TTS)", foreground="gray").grid(
+            row=row, column=2, padx=4, pady=4, sticky="w"
+        )
+
+    def _on_sample_chosen(self, _event: object = None) -> None:
+        label = self.sample_var.get()
+        for sample_label, sample_path in self._speech_samples:
+            if sample_label == label:
+                self.audio_path.set(str(sample_path))
+                self._append_log(f"Selected bundled sample: {sample_path.name}")
+                break
 
     def _pick_file(self, var: tk.StringVar, filetypes: tuple[str, str]) -> None:
         initial = Path(var.get()).parent if var.get() else SAMPLES_DIR

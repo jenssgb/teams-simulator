@@ -130,6 +130,16 @@ if ($venvOk) {
         return ("$($entries.Count) avatars: " + (($entries | ForEach-Object { $_.label }) -join ', '))
     } | Out-Null
 
+    Check "bundled English speech samples present (samples\sample_*.mp3)" {
+        $files = Get-ChildItem (Join-Path $RepoRoot 'samples') -Filter 'sample_*.mp3' -ErrorAction SilentlyContinue
+        if (-not $files -or $files.Count -lt 1) {
+            throw "no sample_*.mp3 found - re-clone the repo or run scripts\generate_speech_samples.py"
+        }
+        $tooSmall = $files | Where-Object { $_.Length -lt 8KB }
+        if ($tooSmall) { throw "suspiciously small sample(s): $($tooSmall.Name -join ', ')" }
+        return ("$($files.Count) samples (" + ([math]::Round((($files | Measure-Object Length -Sum).Sum / 1KB)) ) + " KB total)")
+    } | Out-Null
+
     Check "Desktop shortcut 'Teams Simulator' present" {
         $candidates = @(
             (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Teams Simulator.lnk'),
