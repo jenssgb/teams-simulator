@@ -72,11 +72,11 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Teams Simulator")
-        # Tall enough that the Log pane is always visible (the log was
-        # the user's most-requested troubleshooting tool, so it must
-        # never be clipped to zero height on first launch).
-        root.geometry("880x880")
-        root.minsize(780, 720)
+        # Tall enough that the controls + banner are visible without
+        # scrolling; log is collapsed by default so we don't need a huge
+        # window.
+        root.geometry("760x620")
+        root.minsize(720, 560)
 
         # State -----------------------------------------------------------
         self.controller: Optional[SimulatorController] = None
@@ -146,178 +146,256 @@ class App:
     # Layout
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        pad = {"padx": 8, "pady": 4}
+        outer_pad = {"padx": 12, "pady": 6}
 
-        # Device status panel ---------------------------------------------
-        dev_frame = ttk.LabelFrame(self.root, text="Virtual devices")
-        dev_frame.pack(fill="x", **pad)
+        # ── Compact device strip + diagnostics buttons ───────────────────
+        dev_row = ttk.Frame(self.root)
+        dev_row.pack(fill="x", padx=12, pady=(10, 4))
+        self.dev_mic_label = ttk.Label(dev_row, text="🎙 checking…",
+                                       font=("Segoe UI", 10))
+        self.dev_mic_label.pack(side="left", padx=(0, 16))
+        self.dev_cam_label = ttk.Label(dev_row, text="📷 checking…",
+                                       font=("Segoe UI", 10))
+        self.dev_cam_label.pack(side="left")
+        ttk.Button(dev_row, text="⟳", width=3, command=self._refresh_device_status).pack(
+            side="right", padx=(2, 0)
+        )
+        ttk.Button(dev_row, text="🩺", width=3, command=self._run_diagnostics).pack(
+            side="right"
+        )
 
-        self.dev_mic_label = ttk.Label(dev_frame, text="checking…")
-        self.dev_mic_label.pack(anchor="w", padx=8, pady=2)
-        self.dev_cam_label = ttk.Label(dev_frame, text="checking…")
-        self.dev_cam_label.pack(anchor="w", padx=8, pady=2)
-        # Surface the most common gotcha early: RDP sessions hide local
-        # virtual audio devices from WASAPI -> Teams cannot see VB-Cable.
+        # ── RDP warning (only when actually inside an RDP session) ───────
         import os as _os
-        if (_os.environ.get("SESSIONNAME", "").upper().startswith("RDP")):
-            self.dev_rdp_label = ttk.Label(
-                dev_frame,
-                text=(
-                    "⚠ Running inside an RDP session. Windows RDP redirects audio and HIDES "
-                    "local virtual cables from Teams. Connect via the console session "
-                    "(Hyper-V Connect / Cloud-PC portal) or set 'Play on remote computer' in mstsc."
-                ),
-                foreground="dark orange",
-                wraplength=720,
-            )
-            self.dev_rdp_label.pack(anchor="w", padx=8, pady=(2, 0))
-        self.dev_hint_label = ttk.Label(
-            dev_frame,
-            text="If a device is missing, run setup\\install.ps1 (as Administrator), or click Diagnostics for details.",
-            foreground="gray",
-        )
-        self.dev_hint_label.pack(anchor="w", padx=8, pady=(0, 4))
-        button_row = ttk.Frame(dev_frame)
-        button_row.pack(anchor="e", padx=8, pady=4)
-        ttk.Button(button_row, text="🩺 Diagnostics", command=self._run_diagnostics).pack(
-            side="left", padx=(0, 6)
-        )
-        ttk.Button(button_row, text="Re-check", command=self._refresh_device_status).pack(
-            side="left"
-        )
+        if _os.environ.get("SESSIONNAME", "").upper().startswith("RDP"):
+            rdp_strip = tk.Frame(self.root, bg="#fff3cd", bd=0)
+            rdp_strip.pack(fill="x", padx=12, pady=(0, 4))
+            tk.Label(
+                rdp_strip, bg="#fff3cd", fg="#856404",
+                text=("⚠  RDP session detected — set 'Play on this computer' "
+                      "in your RDP client, or Teams won't see audio."),
+                font=("Segoe UI", 9), padx=8, pady=4, anchor="w",
+                wraplength=720, justify="left",
+            ).pack(fill="x")
 
-        # Files panel ------------------------------------------------------
-        files_frame = ttk.LabelFrame(self.root, text="Inputs")
-        files_frame.pack(fill="x", **pad)
+        # ── Inputs ───────────────────────────────────────────────────────
+        inp_outer = ttk.Frame(self.root)
+        inp_outer.pack(fill="x", **outer_pad)
 
-        # Avatar dropdown + preview. Only built when there is at least one
-        # bundled avatar — otherwise the panel collapses cleanly.
-        next_row = 0
+        # Avatar preview pinned right.
         if self._avatars:
-            self._build_avatar_row(files_frame, row=next_row)
-            next_row += 1
+            self.avatar_preview = ttk.Label(inp_outer, borderwidth=1,
+                                            relief="solid", anchor="center")
+            self.avatar_preview.pack(side="right", padx=(12, 0))
+
+        inp = ttk.Frame(inp_outer)
+        inp.pack(side="left", fill="x", expand=True)
+
+        bold = ("Segoe UI", 9, "bold")
+
+        # Avatar row
+        if self._avatars:
+            ttk.Label(inp, text="Avatar", font=bold).grid(
+                row=0, column=0, sticky="w", padx=(0, 12), pady=4
+            )
+            avatar_combo = ttk.Combobox(
+                inp, textvariable=self.avatar_var,
+                values=[a.label for a in self._avatars],
+                state="readonly", width=24,
+            )
+            avatar_combo.grid(row=0, column=1, sticky="w", pady=4)
+            avatar_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_avatar_selected())
+            ttk.Button(inp, text="📁", width=3,
+                       command=self._pick_image).grid(row=0, column=2, padx=(8, 0), pady=4)
+            if not self.avatar_var.get():
+                self.avatar_var.set(self._avatars[0].label)
+            self._on_avatar_selected()
+
+        # Audio row
+        ttk.Label(inp, text="Audio", font=bold).grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=4
+        )
         if self._speech_samples:
-            self._build_sample_row(files_frame, row=next_row)
-            next_row += 1
-        audio_row = next_row
-        file_row = next_row + 1
+            sample_combo = ttk.Combobox(
+                inp, textvariable=self.sample_var,
+                values=[label for label, _ in self._speech_samples],
+                state="readonly",
+            )
+            sample_combo.grid(row=1, column=1, sticky="we", pady=4)
+            sample_combo.bind("<<ComboboxSelected>>", self._on_sample_chosen)
+        else:
+            ttk.Label(inp, text="(no bundled samples found)",
+                      foreground="#888888").grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Button(inp, text="📁", width=3,
+                   command=self._pick_audio).grid(row=1, column=2, padx=(8, 0), pady=4)
 
-        self._build_file_row(files_frame, audio_row, "Audio file:", self.audio_path,
-                             ("Audio", "*.wav *.flac *.ogg *.mp3 *.aiff"))
-        self._build_file_row(files_frame, file_row, "Custom image:", self.image_path,
-                             ("Image", "*.png *.jpg *.jpeg *.bmp"))
-
-        # Options panel ----------------------------------------------------
-        opt_frame = ttk.LabelFrame(self.root, text="Options")
-        opt_frame.pack(fill="x", **pad)
-        ttk.Checkbutton(opt_frame, text="Loop audio", variable=self.loop_var).grid(
-            row=0, column=0, padx=8, pady=4, sticky="w"
+        # Muted path under the audio dropdown — keeps the path visible
+        # for power-users without screaming an editable Entry at everyone.
+        self.audio_path_display = tk.StringVar()
+        self._update_audio_display()
+        self.audio_path.trace_add("write", lambda *_: self._update_audio_display())
+        ttk.Label(inp, textvariable=self.audio_path_display,
+                  foreground="#888888", font=("Segoe UI", 8)).grid(
+            row=2, column=1, columnspan=2, sticky="w", pady=(0, 4)
         )
-        ttk.Label(opt_frame, text="FPS:").grid(row=0, column=1, padx=(20, 4), sticky="e")
-        ttk.Spinbox(opt_frame, from_=10, to=60, textvariable=self.fps_var, width=5).grid(
-            row=0, column=2, padx=(0, 8), sticky="w"
+
+        # Loop-audio inline (no dedicated Options panel for ONE checkbox).
+        ttk.Checkbutton(inp, text="Loop audio", variable=self.loop_var).grid(
+            row=3, column=1, sticky="w", pady=(2, 4)
         )
 
-        # Playback panel ---------------------------------------------------
-        # Big colored status banner so the user always knows AT A GLANCE
-        # what the simulator is doing. Plus a prominent audio progress
-        # bar with countdown so they know how long the clip will play.
-        playback_frame = ttk.LabelFrame(self.root, text="Playback")
-        playback_frame.pack(fill="x", **pad)
+        inp.columnconfigure(1, weight=1)
 
-        # --- Banner (color-coded) ---
-        # Plain tk.Frame so we can color the background per state.
-        self.banner_frame = tk.Frame(playback_frame, bg="#e0e0e0", bd=0,
-                                     relief="flat", height=64)
-        self.banner_frame.pack(fill="x", padx=8, pady=(8, 6))
+        # ── Playback panel ───────────────────────────────────────────────
+        pb = ttk.Frame(self.root)
+        pb.pack(fill="x", **outer_pad)
+
+        # Slimmer color-coded status banner.
+        self.banner_frame = tk.Frame(pb, bg="#e0e0e0", bd=0,
+                                     relief="flat", height=52)
+        self.banner_frame.pack(fill="x", pady=(0, 6))
         self.banner_frame.pack_propagate(False)
         self.banner_label = tk.Label(
             self.banner_frame, textvariable=self.banner_text,
             bg="#e0e0e0", fg="#333333",
-            font=("Segoe UI", 16, "bold"), anchor="w", padx=12,
+            font=("Segoe UI", 14, "bold"), anchor="w", padx=12,
         )
-        self.banner_label.pack(side="top", fill="x", pady=(6, 0))
+        self.banner_label.pack(side="top", fill="x", pady=(4, 0))
         self.banner_detail_label = tk.Label(
             self.banner_frame, textvariable=self.banner_detail,
             bg="#e0e0e0", fg="#555555",
             font=("Segoe UI", 9), anchor="w", padx=12, justify="left",
         )
-        self.banner_detail_label.pack(side="top", fill="x", pady=(0, 6))
+        self.banner_detail_label.pack(side="top", fill="x", pady=(0, 4))
 
-        # --- Buttons ---
-        ctrl_frame = ttk.Frame(playback_frame)
-        ctrl_frame.pack(fill="x", padx=8, pady=4)
-        self.btn_start = ttk.Button(ctrl_frame, text="▶ Start", command=self._on_start,
-                                    width=14)
-        self.btn_start.pack(side="left", padx=4)
-        self.btn_pause = ttk.Button(ctrl_frame, text="⏸ Pause", command=self._on_pause,
-                                    state="disabled", width=14)
+        # Buttons
+        btn_row = ttk.Frame(pb)
+        btn_row.pack(fill="x", pady=(2, 6))
+        self.btn_start = ttk.Button(btn_row, text="▶  Start",
+                                    command=self._on_start, width=12)
+        self.btn_start.pack(side="left", padx=(0, 4))
+        self.btn_pause = ttk.Button(btn_row, text="⏸  Pause",
+                                    command=self._on_pause,
+                                    state="disabled", width=12)
         self.btn_pause.pack(side="left", padx=4)
-        self.btn_stop = ttk.Button(ctrl_frame, text="⏹ Stop", command=self._on_stop,
-                                   state="disabled", width=14)
+        self.btn_stop = ttk.Button(btn_row, text="⏹  Stop",
+                                   command=self._on_stop,
+                                   state="disabled", width=12)
         self.btn_stop.pack(side="left", padx=4)
 
-        # --- Audio progress bar with prominent time + countdown ---
-        prog_frame = ttk.Frame(playback_frame)
-        prog_frame.pack(fill="x", padx=8, pady=(8, 4))
-        ttk.Label(prog_frame, text="Audio progress:",
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        bar_row = ttk.Frame(prog_frame)
-        bar_row.pack(fill="x", pady=(2, 0))
+        # Progress + position + countdown — three signals, one row each
+        # but no labelled sub-headers (the bars speak for themselves).
+        prog_row = ttk.Frame(pb)
+        prog_row.pack(fill="x", pady=(4, 0))
         self.audio_progress_bar = ttk.Progressbar(
-            bar_row, orient="horizontal", mode="determinate",
+            prog_row, orient="horizontal", mode="determinate",
             maximum=100.0, variable=self.audio_progress,
         )
         self.audio_progress_bar.pack(side="left", fill="x", expand=True)
-        # Time text right of the bar (monospace so it doesn't wobble).
-        self.position_label = ttk.Label(bar_row, textvariable=self.position_text,
+        self.position_label = ttk.Label(prog_row, textvariable=self.position_text,
                                         font=("Consolas", 10), width=14, anchor="e")
         self.position_label.pack(side="right", padx=(8, 0))
-        self.remaining_label = ttk.Label(prog_frame, textvariable=self.time_remaining,
-                                         font=("Segoe UI", 9), foreground="#555555")
+        self.remaining_label = ttk.Label(pb, textvariable=self.time_remaining,
+                                         font=("Segoe UI", 9), foreground="#666666")
         self.remaining_label.pack(anchor="e", pady=(2, 0))
 
-        # --- Live audio level (collapsed inside the same panel for cohesion) ---
-        ttk.Label(playback_frame, text="Live audio level:",
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=8, pady=(8, 0))
+        # Live audio level — slim bar, no header.
         self.level_bar = ttk.Progressbar(
-            playback_frame, orient="horizontal", mode="determinate",
+            pb, orient="horizontal", mode="determinate",
             maximum=100.0, variable=self.audio_level,
         )
-        self.level_bar.pack(fill="x", padx=8, pady=(2, 8))
+        self.level_bar.pack(fill="x", pady=(8, 0))
 
-        # Log pane ---------------------------------------------------------
-        log_frame = ttk.LabelFrame(self.root, text="Log")
-        log_frame.pack(fill="both", expand=True, **pad)
-        # Higher default so the log is readable on first launch; user can
-        # still drag the window to grow it further.
-        self.log_text = tk.Text(log_frame, height=14, wrap="word", state="disabled",
-                                font=("Consolas", 9))
-        scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        # ── Collapsible log ──────────────────────────────────────────────
+        log_outer = ttk.Frame(self.root)
+        log_outer.pack(fill="both", expand=True, padx=12, pady=(8, 10))
+        toggle_row = ttk.Frame(log_outer)
+        toggle_row.pack(fill="x")
+        self.log_visible = False
+        self._log_lines = 0
+        self.log_toggle_text = tk.StringVar(value="▶  Show log")
+        self.log_toggle_btn = ttk.Button(
+            toggle_row, textvariable=self.log_toggle_text,
+            command=self._toggle_log, width=18,
+        )
+        self.log_toggle_btn.pack(side="left")
+        if hasattr(self, "_log_file_path") and self._log_file_path:
+            ttk.Label(toggle_row,
+                      text=f"  →  {Path(self._log_file_path).name}",
+                      foreground="#888888", font=("Segoe UI", 8)).pack(
+                side="left", padx=(8, 0)
+            )
+
+        self.log_container = ttk.Frame(log_outer)
+        self.log_text = tk.Text(self.log_container, height=10, wrap="word",
+                                state="disabled", font=("Consolas", 9))
+        scroll = ttk.Scrollbar(self.log_container, orient="vertical",
+                               command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.log_text.pack(fill="both", expand=True)
+        # log_container intentionally NOT packed yet — collapsed by default.
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _build_avatar_row(self, parent: ttk.LabelFrame, row: int) -> None:
-        ttk.Label(parent, text="Avatar:").grid(row=row, column=0, padx=8, pady=4, sticky="ne")
+    # ------------------------------------------------------------------
+    # Small UI helpers
+    # ------------------------------------------------------------------
+    def _toggle_log(self) -> None:
+        if self.log_visible:
+            self.log_container.pack_forget()
+            self.log_visible = False
+            self._update_log_toggle_text()
+        else:
+            self.log_container.pack(fill="both", expand=True, pady=(4, 0))
+            self.log_visible = True
+            self._update_log_toggle_text()
 
+    def _update_log_toggle_text(self) -> None:
+        arrow = "▼" if self.log_visible else "▶"
+        action = "Hide log" if self.log_visible else "Show log"
+        suffix = f"  ({self._log_lines})" if self._log_lines else ""
+        self.log_toggle_text.set(f"{arrow}  {action}{suffix}")
+
+    def _update_audio_display(self) -> None:
+        p = self.audio_path.get()
+        if not p:
+            self.audio_path_display.set("(no file selected)")
+            return
+        try:
+            parts = Path(p).parts
+            short = "/".join(parts[-2:]) if len(parts) >= 2 else p
+        except Exception:
+            short = p
+        self.audio_path_display.set(short)
+
+    def _pick_audio(self) -> None:
+        self._pick_file(self.audio_path,
+                        ("Audio", "*.wav *.flac *.ogg *.mp3 *.aiff"))
+        # Custom file -> drop the dropdown selection so it doesn't
+        # mislead the user about what's actually loaded.
+        if self.audio_path.get():
+            self.sample_var.set("")
+
+    def _pick_image(self) -> None:
+        self._pick_file(self.image_path,
+                        ("Image", "*.png *.jpg *.jpeg *.bmp"))
+
+    def _build_avatar_row(self, parent: ttk.LabelFrame, row: int) -> None:
+        # Legacy helper kept for backward-compatibility. The new compact
+        # _build_ui inlines avatar wiring; this method is unused but
+        # remains so external callers (tests, etc.) don't break.
+        ttk.Label(parent, text="Avatar:").grid(row=row, column=0, padx=8, pady=4, sticky="ne")
         labels = [a.label for a in self._avatars]
         combo = ttk.Combobox(parent, textvariable=self.avatar_var,
                              values=labels, state="readonly", width=20)
         combo.grid(row=row, column=1, padx=4, pady=4, sticky="w")
         combo.bind("<<ComboboxSelected>>", lambda _e: self._on_avatar_selected())
-
-        # Preview label spans the same column as the file rows below so
-        # it lines up nicely.
-        self.avatar_preview = ttk.Label(parent, borderwidth=1, relief="solid",
-                                        anchor="center")
-        self.avatar_preview.grid(row=row, column=2, rowspan=1, padx=8, pady=4,
-                                 sticky="e")
-
+        if not hasattr(self, "avatar_preview"):
+            self.avatar_preview = ttk.Label(parent, borderwidth=1, relief="solid",
+                                            anchor="center")
+            self.avatar_preview.grid(row=row, column=2, rowspan=1, padx=8, pady=4,
+                                     sticky="e")
         parent.columnconfigure(1, weight=1)
-        # Make sure there's a sensible initial selection.
         if self._avatars and not self.avatar_var.get():
             self.avatar_var.set(self._avatars[0].label)
         self._on_avatar_selected()
@@ -544,11 +622,13 @@ class App:
 
         # Mirror everything to a file under Desktop\TeamsSimulatorLogs
         # so the user keeps the log even after the GUI window closes.
+        # We enqueue the "Log file: ..." message into the same queue the
+        # poll loop drains - log_text doesn't exist yet at this point.
         try:
-            from .logsetup import install_file_logging, get_log_dir
+            from .logsetup import install_file_logging
             log_path = install_file_logging("ui")
             self._log_file_path = log_path
-            self._append_log(f"Log file: {log_path}")
+            self.log_queue.put_nowait(f"Log file: {log_path}")
         except Exception as exc:  # pragma: no cover - defensive
             self._log_file_path = None
             log.warning("could not install file logging: %s", exc)
@@ -562,6 +642,11 @@ class App:
             self.log_text.delete("1.0", f"{line_count - 2000}.0")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        # Update the collapsible-log toggle counter so users notice when
+        # there's something new to look at.
+        self._log_lines += 1
+        if hasattr(self, "log_toggle_text"):
+            self._update_log_toggle_text()
 
     # ------------------------------------------------------------------
     # Device status
@@ -599,8 +684,24 @@ class App:
         threading.Thread(target=probe, daemon=True).start()
 
     def _apply_device_status(self, mic_ok: bool, mic_msg: str, cam_ok: bool, cam_msg: str) -> None:
-        self.dev_mic_label.config(text="🎤 " + mic_msg, foreground=("dark green" if mic_ok else "red"))
-        self.dev_cam_label.config(text="📷 " + cam_msg, foreground=("dark green" if cam_ok else "red"))
+        # Compact one-liners for the new minimal device strip; full
+        # diagnostic message goes to the log so power-users can still
+        # see the underlying detail.
+        if mic_ok:
+            self.dev_mic_label.config(text="🎙 CABLE Output  ✓",
+                                      foreground="#0a6f10")
+        else:
+            self.dev_mic_label.config(text="🎙 mic missing  ✗  · click 🩺",
+                                      foreground="#922b21")
+        if cam_ok:
+            self.dev_cam_label.config(text="📷 OBS Virtual Camera  ✓",
+                                      foreground="#0a6f10")
+        else:
+            self.dev_cam_label.config(text="📷 cam missing  ✗  · click 🩺",
+                                      foreground="#922b21")
+        # Mirror the verbose status to the log for support / debugging.
+        self._append_log(f"DEV    {'OK ' if mic_ok else 'FAIL'}  {mic_msg}")
+        self._append_log(f"DEV    {'OK ' if cam_ok else 'FAIL'}  {cam_msg}")
 
     def _run_diagnostics(self) -> None:
         # Spawn setup\diagnose.ps1 in a NEW PowerShell window. It writes
