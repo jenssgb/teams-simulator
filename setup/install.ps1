@@ -1028,8 +1028,19 @@ if ($script:RebootRequired) {
         }
     } else {
         # In interactive mode default to N to preserve the prior behaviour.
-        $resp = Read-Host "Reboot now? [y/N]"
-        $reboot = ($resp -match '^[yY]')
+        # Skip the prompt under -DryRun (so dryrun.ps1 / CI don't hang) and
+        # whenever TEAMS_SIMULATOR_NONINTERACTIVE=1 (so test harnesses don't
+        # block on Read-Host). In both cases default to "no reboot" - safe.
+        if ($script:DryRun) {
+            Write-Dry "would prompt 'Reboot now? [y/N]' (default N -> no reboot)"
+            $reboot = $false
+        } elseif ($env:TEAMS_SIMULATOR_NONINTERACTIVE) {
+            Write-Warn2 "non-interactive mode -> defaulting to 'no reboot'"
+            $reboot = $false
+        } else {
+            $resp = Read-Host "Reboot now? [y/N]"
+            $reboot = ($resp -match '^[yY]')
+        }
     }
 
     if ($reboot) {
