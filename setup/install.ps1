@@ -606,7 +606,7 @@ function Install-PythonDeps {
 # Long PD audio samples (~73 MB, fetched on demand from archive.org/LibriVox)
 # ---------------------------------------------------------------------------
 function Get-LongSpeechSamples {
-    Write-Step 'downloading long PD audio samples (~73 MB - one time)'
+    Write-Step 'optional: downloading LibriVox classic monologues (~73 MB - one time, internet required)'
 
     $script = Join-Path $RepoRoot 'scripts\download_long_samples.py'
     if (-not (Test-Path $script)) {
@@ -623,6 +623,18 @@ function Get-LongSpeechSamples {
         return
     }
 
+    # Fast connectivity preflight: skip entirely if archive.org is unreachable.
+    # This avoids minutes of "wild error messages" from urllib retries.
+    try {
+        $probe = Invoke-WebRequest -Uri 'https://archive.org/about/' `
+                                   -Method Head -UseBasicParsing -TimeoutSec 5 -MaximumRedirection 3 `
+                                   -ErrorAction Stop
+        if ($probe.StatusCode -ne 200) { throw "HTTP $($probe.StatusCode)" }
+    } catch {
+        Write-Warn2 "archive.org not reachable - skipping LibriVox download (the bundled business monologues are already on disk and work offline)"
+        return
+    }
+
     Invoke-Action "python scripts\download_long_samples.py" {
         & $py $script
         # Non-fatal: the script returns 0 even when offline, so the installer
@@ -635,10 +647,19 @@ function Get-LongSpeechSamples {
 }
 
 # ---------------------------------------------------------------------------
-# Modern business-context monologues (~4 MB, generated on demand via Edge-TTS)
+# Modern business-context monologues (~5 MB)
+# Now SHIPPED with the repo (samples/long/business_*.mp3) so the user always
+# has decent monologue content. This step is only useful if someone deletes
+# the bundled files OR edits the script and wants to regenerate.
 # ---------------------------------------------------------------------------
 function New-BusinessSpeechSamples {
-    Write-Step 'generating modern business-context monologues (~4 MB - Edge-TTS)'
+    $bundled = Get-ChildItem (Join-Path $RepoRoot 'samples\long\business_*.mp3') -ErrorAction SilentlyContinue
+    if ($bundled.Count -ge 2) {
+        Write-Ok ("business monologues already bundled in repo ({0} files, {1:N1} MB)" -f $bundled.Count, (($bundled | Measure-Object -Property Length -Sum).Sum / 1MB))
+        return
+    }
+
+    Write-Step 'regenerating modern business-context monologues (~5 MB - Edge-TTS, internet required)'
 
     $script = Join-Path $RepoRoot 'scripts\generate_business_long_samples.py'
     if (-not (Test-Path $script)) {
@@ -657,8 +678,7 @@ function New-BusinessSpeechSamples {
 
     Invoke-Action "python scripts\generate_business_long_samples.py" {
         & $py $script
-        # Non-fatal: needs Edge-TTS endpoint, may fail offline. The GUI
-        # just shows fewer entries.
+        # Non-fatal: needs Edge-TTS endpoint, may fail offline.
         if ($LASTEXITCODE -ne 0) {
             Write-Warn2 "generate_business_long_samples.py exited $LASTEXITCODE (non-fatal)"
         }

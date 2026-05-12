@@ -81,7 +81,11 @@ def _format_size(n: int) -> str:
 
 def _download_one(sample: LongSample, out_path: Path) -> bool:
     """Download ``sample`` to ``out_path``. Idempotent - skip if already
-    present and big enough. Returns True on success or skip, False on error."""
+    present and big enough. Returns True on success or skip, False on error.
+
+    Retries with exponential back-off because archive.org can be flaky
+    on first connect from corporate VMs.
+    """
 
     if out_path.exists():
         size = out_path.stat().st_size
@@ -96,43 +100,52 @@ def _download_one(sample: LongSample, out_path: Path) -> bool:
 
     print(f"  [get ] {sample.url}")
     print(f"         -> {out_path}  (expected ~{_format_size(sample.expected_min_bytes)})")
-    request = urllib.request.Request(sample.url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response, \
-             open(out_path, "wb") as out_file:
-            total = response.length or 0
-            written = 0
-            chunk = 64 * 1024
-            next_report = 0
-            while True:
-                buf = response.read(chunk)
-                if not buf:
-                    break
-                out_file.write(buf)
-                written += len(buf)
-                if total and written >= next_report:
-                    pct = 100 * written / total
-                    print(f"         ... {pct:5.1f}%  ({_format_size(written)} / {_format_size(total)})")
-                    next_report += max(total // 10, 1)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        print(f"  [ERROR] {sample.label}: {exc}", file=sys.stderr)
-        if out_path.exists():
-            try:
-                out_path.unlink()
-            except OSError:
-                pass
-        return False
 
-    size = out_path.stat().st_size
-    if size < sample.expected_min_bytes:
-        print(
-            f"  [ERROR] {sample.label}: downloaded only {_format_size(size)} "
-            f"(expected >= {_format_size(sample.expected_min_bytes)})",
-            file=sys.stderr,
-        )
-        return False
-    print(f"  [ ok ] {out_path.name}  ({_format_size(size)})")
-    return True
+    last_err: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            request = urllib.request.Request(sample.url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(request, timeout=120) as response, \
+                 open(out_path, "wb") as out_file:
+                total = response.length or 0
+                written = 0
+                chunk = 64 * 1024
+                next_report = 0
+                while True:
+                    buf = response.read(chunk)
+                    if not buf:
+                        break
+                    out_file.write(buf)
+                    written += len(buf)
+                    if total and written >= next_report:
+                        pct = 100 * written / total
+                        print(f"         ... {pct:5.1f}%  ({_format_size(written)} / {_format_size(total)})")
+                        next_report += max(total // 10, 1)
+            size = out_path.stat().st_size
+            if size < sample.expected_min_bytes:
+                last_err = RuntimeError(
+                    f"got {_format_size(size)}, expected >= {_format_size(sample.expected_min_bytes)}"
+                )
+                if out_path.exists():
+                    try: out_path.unlink()
+                    except OSError: pass
+                raise last_err
+            print(f"  [ ok ] {out_path.name}  ({_format_size(size)})")
+            return True
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            last_err = exc
+            print(f"  [warn] attempt {attempt}/3 failed: {exc}", file=sys.stderr)
+            if out_path.exists():
+                try: out_path.unlink()
+                except OSError: pass
+            if attempt < 3:
+                import time
+                backoff = 2 ** attempt
+                print(f"         retrying in {backoff}s ...")
+                time.sleep(backoff)
+
+    print(f"  [ERROR] {sample.label}: gave up after 3 attempts ({last_err})", file=sys.stderr)
+    return False
 
 
 def _write_manifest(results: list[tuple[LongSample, Path, bool]]) -> None:
@@ -153,9 +166,51 @@ def _write_manifest(results: list[tuple[LongSample, Path, bool]]) -> None:
     print(f"  manifest written: {MANIFEST_PATH}  ({len(payload)} entries)")
 
 
+def _archive_org_reachable(timeout: float = 5.0) -> bool:
+    """Quick HEAD against archive.org; returns False fast on corporate
+    firewalls so we don't waste minutes on retry loops."""
+    try:
+        request = urllib.request.Request(
+            "https://archive.org/about/", method="HEAD",
+            headers={"User-Agent": USER_AGENT},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as r:
+            return 200 <= r.status < 400
+    except Exception:
+        return False
+
+
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"download target: {OUT_DIR}")
+
+    # Check what's already on disk (incl. shipped business monologues).
+    existing_classics = sorted(OUT_DIR.glob("0*.mp3"))
+    if existing_classics and all(
+        (OUT_DIR / f"{s.slug}.mp3").exists() and
+        (OUT_DIR / f"{s.slug}.mp3").stat().st_size >= s.expected_min_bytes
+        for s in SAMPLES
+    ):
+        print("All LibriVox classics already on disk; nothing to download.")
+        results = [(s, OUT_DIR / f"{s.slug}.mp3", True) for s in SAMPLES]
+        _write_manifest(results)
+        return 0
+
+    # Preflight: skip the whole script if archive.org is unreachable.
+    if not _archive_org_reachable():
+        print("archive.org is not reachable from this machine "
+              "(corporate firewall? offline?). Skipping the optional "
+              "LibriVox classics download. The bundled business "
+              "monologues already provide ~26 min of usable speech.",
+              file=sys.stderr)
+        # Still write a manifest of what's already there so the UI is correct.
+        results = []
+        for s in SAMPLES:
+            p = OUT_DIR / f"{s.slug}.mp3"
+            results.append((s, p, p.exists() and p.stat().st_size >= s.expected_min_bytes))
+        _write_manifest(results)
+        return 0
+
     results: list[tuple[LongSample, Path, bool]] = []
     for sample in SAMPLES:
         out_path = OUT_DIR / f"{sample.slug}.mp3"
@@ -168,10 +223,10 @@ def main() -> int:
     n_total = len(results)
     print(f"\n{n_ok}/{n_total} long samples available in {OUT_DIR}")
     if n_ok == 0:
-        print("WARNING: no long samples were downloaded - the GUI dropdown will be empty.",
+        print("WARNING: no long samples were downloaded - the GUI dropdown "
+              "will fall back to the bundled business monologues.",
               file=sys.stderr)
-        # Don't fail the installer - users may be offline. They can still
-        # pick the bundled short samples or bring their own audio.
+        # Don't fail the installer - users may be offline.
         return 0
     return 0
 

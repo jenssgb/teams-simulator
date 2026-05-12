@@ -71,8 +71,11 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Teams Simulator")
-        root.geometry("760x620")
-        root.minsize(700, 540)
+        # Tall enough that the Log pane is always visible (the log was
+        # the user's most-requested troubleshooting tool, so it must
+        # never be clipped to zero height on first launch).
+        root.geometry("880x880")
+        root.minsize(780, 720)
 
         # State -----------------------------------------------------------
         self.controller: Optional[SimulatorController] = None
@@ -231,7 +234,9 @@ class App:
         # Log pane ---------------------------------------------------------
         log_frame = ttk.LabelFrame(self.root, text="Log")
         log_frame.pack(fill="both", expand=True, **pad)
-        self.log_text = tk.Text(log_frame, height=8, wrap="word", state="disabled",
+        # Higher default so the log is readable on first launch; user can
+        # still drag the window to grow it further.
+        self.log_text = tk.Text(log_frame, height=14, wrap="word", state="disabled",
                                 font=("Consolas", 9))
         scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)

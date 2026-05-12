@@ -1,0 +1,20 @@
+[
+  {
+    "slug": "business_01_ai_in_software_engineering",
+    "label": "AI in software engineering, 2026 edition (~13 min)",
+    "file": "business_01_ai_in_software_engineering.mp3",
+    "voice": "en-US-AriaNeural",
+    "rate": "-2%",
+    "size_bytes": 2522160,
+    "credit": "AI-generated locally with Microsoft Edge-TTS"
+  },
+  {
+    "slug": "business_02_cloud_architecture_lessons",
+    "label": "Cloud architecture lessons from a decade in distributed systems (~13 min)",
+    "file": "business_02_cloud_architecture_lessons.mp3",
+    "voice": "en-GB-RyanNeural",
+    "rate": "-3%",
+    "size_bytes": 2393712,
+    "credit": "AI-generated locally with Microsoft Edge-TTS"
+  }
+]
