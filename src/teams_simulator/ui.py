@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
@@ -91,7 +92,7 @@ class App:
                 if label.startswith(prefix):
                     return label, path
             return None
-        chosen = _pick("📊 business") or _pick("🎙️ classic") or _pick("📢 short")
+        chosen = _pick("💼") or _pick("📚") or _pick("🔬")
         if chosen is not None:
             default_label, default_path = chosen
             default_audio = str(default_path)
@@ -373,32 +374,25 @@ class App:
 
         Looks for three things in ``samples/``:
 
-        1. Short bundled MP3s (``samples/sample_*.mp3``) - committed to git.
-        2. Modern business-context monologues (``samples/long/business_*.mp3``)
-           generated locally via Edge-TTS by the installer. Manifest:
+        1. Modern business-context monologues (``samples/long/business_*.mp3``)
+           bundled with the repo. Manifest:
            ``samples/long/business_samples.json``.
-        3. Long PD audiobooks (``samples/long/*.mp3``) downloaded on demand.
+        2. Long PD audiobooks (``samples/long/*.mp3``) downloaded on demand.
            Manifest: ``samples/long/long_samples.json``.
+        3. Short bundled MP3s (``samples/sample_*.mp3``) - committed to git;
+           useful for a quick "is the pipeline alive" pipeline check, NOT
+           for transcript demos.
 
-        Order in the dropdown: short (verification), then business
-        (modern, transcript-relevant), then classics (Holmes / Walden).
+        Order in the dropdown:
+          💼 Business  (default - transcript-relevant, ~13 min each)
+          📚 Classic   (LibriVox public-domain, only if downloaded)
+          🔬 Quick test (~10 s pipeline checks, last)
         """
         out: list[tuple[str, Path]] = []
         if not SAMPLES_DIR.exists():
             return out
 
-        for path in sorted(SAMPLES_DIR.glob("sample_*.mp3")):
-            stem = path.stem
-            parts = stem.split("_", 2)
-            if len(parts) >= 3 and parts[0] == "sample":
-                label = f"{parts[1]}. {parts[2].replace('_', ' ').title()}"
-            else:
-                label = stem
-            out.append((f"📢 short · {label}", path))
-
         long_dir = SAMPLES_DIR / "long"
-        if not long_dir.exists():
-            return out
 
         def _load_manifest(name: str) -> dict[str, str]:
             path = long_dir / name
@@ -415,31 +409,93 @@ class App:
             except (ValueError, OSError):
                 return {}
 
-        business_labels = _load_manifest("business_samples.json")
-        long_labels = _load_manifest("long_samples.json")
+        # 1. Business / modern monologues first (default for transcript demos).
+        # Hand-curated pretty titles keep the dropdown narrow regardless
+        # of how verbose the manifest label is.
+        business_titles = {
+            "business_01_ai_in_software_engineering": "AI in software engineering",
+            "business_02_cloud_architecture_lessons": "Cloud architecture lessons",
+        }
+        if long_dir.exists():
+            business_labels = _load_manifest("business_samples.json")
+            for path in sorted(long_dir.glob("business_*.mp3")):
+                title = business_titles.get(path.stem)
+                duration = ""
+                if title is None:
+                    raw = business_labels.get(path.name,
+                                              path.stem.replace("_", " ").title())
+                    m = re.search(r"\(~?\s*(\d+)\s*min\)", raw)
+                    if m:
+                        duration = f"(~{m.group(1)} min)"
+                        raw = raw[: m.start()]
+                    title = raw.split(",")[0].strip(" -·—")
+                else:
+                    raw = business_labels.get(path.name, "")
+                    m = re.search(r"\(~?\s*(\d+)\s*min\)", raw)
+                    duration = f"(~{m.group(1)} min)" if m else ""
+                label = f"💼  Business — {title}"
+                if duration:
+                    label = f"{label}   {duration}"
+                out.append((label, path))
 
-        # Business / modern monologues first (more useful for transcript testing).
-        for path in sorted(long_dir.glob("business_*.mp3")):
-            label = business_labels.get(
-                path.name,
-                path.stem.replace("_", " ").title(),
-            )
-            out.append((f"📊 business · {label}", path))
+        # 2. Classics next (LibriVox PD), only if actually downloaded.
+        classic_titles = {
+            "02_holmes_the_red_headed_league": "Sherlock Holmes — Red-Headed League",
+            "03_walden_economy_part1": "Walden — Economy, part 1",
+        }
+        if long_dir.exists():
+            long_labels = _load_manifest("long_samples.json")
+            for path in sorted(long_dir.glob("*.mp3")):
+                if path.name.startswith("business_"):
+                    continue
+                title = classic_titles.get(path.stem)
+                duration = ""
+                if title is None:
+                    raw = long_labels.get(path.name,
+                                          path.stem.replace("_", " ").title())
+                    m = re.search(r"\(~?\s*(\d+)\s*min\)", raw)
+                    if m:
+                        duration = f"(~{m.group(1)} min)"
+                        raw = raw[: m.start()]
+                    # Strip any remaining parentheticals like "(Thoreau, ...)".
+                    raw = re.sub(r"\s*\([^)]*\)?\s*$", "", raw).rstrip(", -·—")
+                    title = raw
+                else:
+                    raw = long_labels.get(path.name, "")
+                    m = re.search(r"~?\s*(\d+)\s*min", raw)
+                    duration = f"(~{m.group(1)} min)" if m else ""
+                label = f"📚  Classic — {title}"
+                if duration:
+                    label = f"{label}   {duration}"
+                out.append((label, path))
 
-        # LibriVox classics last.
-        for path in sorted(long_dir.glob("*.mp3")):
-            if path.name.startswith("business_"):
-                continue
-            label = long_labels.get(
-                path.name,
-                path.stem.replace("_", " ").title(),
-            )
-            out.append((f"🎙️ classic · {label}", path))
+        # 3. Quick-test snippets last. These are ~10 s and only useful for
+        # verifying the pipeline (mic → Teams), NOT for transcript demos.
+        # We hide the underlying TTS voice name (Guy/Aria/Ryan) — users
+        # don't need to know the engine details.
+        quick_titles = {
+            "sample_1_welcome_guy": "Welcome",
+            "sample_2_ted_talk_aria": "TED-style snippet",
+            "sample_3_storytelling_ryan": "Storytelling",
+        }
+        for path in sorted(SAMPLES_DIR.glob("sample_*.mp3")):
+            title = quick_titles.get(path.stem)
+            if title is None:
+                # Fallback: drop trailing voice name "_guy" / "_aria" / "_ryan".
+                stem = re.sub(r"_(guy|aria|ryan)$", "", path.stem,
+                              flags=re.IGNORECASE)
+                parts = stem.split("_", 2)
+                title = parts[2].replace("_", " ").title() if len(parts) >= 3 else stem
+            duration = _approx_short_duration(path)
+            label = f"🔬  Quick test — {title}"
+            if duration:
+                label = f"{label}   {duration}"
+            out.append((label, path))
 
         return out
 
     def _build_sample_row(self, parent: ttk.LabelFrame, row: int) -> None:
-        ttk.Label(parent, text="Bundled sample:").grid(
+        ttk.Label(parent, text="Audio sample:").grid(
             row=row, column=0, padx=8, pady=4, sticky="e"
         )
         combo = ttk.Combobox(
@@ -451,7 +507,10 @@ class App:
         )
         combo.grid(row=row, column=1, padx=4, pady=4, sticky="we")
         combo.bind("<<ComboboxSelected>>", self._on_sample_chosen)
-        ttk.Label(parent, text="(short = TTS, long = LibriVox PD)", foreground="gray").grid(
+        # Hint that classics are downloaded on demand; business + quick
+        # tests ship with the repo.
+        hint = "💼 Business + 🔬 Quick test bundled  ·  📚 Classic on demand"
+        ttk.Label(parent, text=hint, foreground="gray").grid(
             row=row, column=2, padx=4, pady=4, sticky="w"
         )
 
@@ -802,6 +861,25 @@ def _fmt_time(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     m, s = divmod(int(seconds), 60)
     return f"{m:02d}:{s:02d}"
+
+
+def _approx_short_duration(path: Path) -> str:
+    """Cheap, dependency-free duration estimate for the short MP3 samples.
+
+    For our quick-test snippets we don't want to pull pydub/ffprobe on
+    every UI launch just to render a label. The bundled clips are 64
+    kbit/s mono Edge-TTS output, so size / bitrate gives a usable hint.
+    Returns ``"(~Ns)"`` or ``""`` if the file is missing.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    # Edge-TTS default = 24 kHz mono ~24 KB/s. Empirically: 9-15 s clips
+    # land at ~140-225 KB. Using 16 KB/s gives a slight over-estimate
+    # which is fine for a hint.
+    seconds = max(1, round(size / 16000))
+    return f"(~{seconds}s)"
 
 
 def main() -> int:

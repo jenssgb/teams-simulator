@@ -89,48 +89,39 @@ manifest-driven (`samples/avatars/avatars.json`).
 ## 🎙️ Bundled English speech samples
 
 Three tiers of English speech ship with the simulator so you can go from
-zero to "Teams transcript flowing" in one click:
+zero to "Teams transcript flowing" in one click. The **Audio sample**
+dropdown in the GUI lists them in the order you'll actually want them:
 
-### Short — instant verification (committed to git, ~575 KB total)
-
-Three short, professional-grade English speech clips in
-`samples/sample_*.mp3`. Pick one from the **Bundled sample** dropdown in
-the GUI to verify your audio path end-to-end **without having to find or
-record a file first**.
-
-| # | Voice | Style | ~Duration |
-|---|-------|-------|-----------|
-| 1 | Guy (US, male) | Welcome / setup verification | ~25 s |
-| 2 | Aria (US, female) | TED-talk-style monologue | ~45 s |
-| 3 | Ryan (UK, male) | Storytelling | ~45 s |
-
-Generated locally with Microsoft **Edge-TTS** neural voices (the same
-engine that powers Edge Read-Aloud) — freely redistributable. Re-generate
-or change the scripts/voices any time:
-
-```powershell
-.venv\Scripts\python.exe scripts\generate_speech_samples.py
+```
+💼  Business — AI in software engineering              (~13 min)   ← Default
+💼  Business — Cloud architecture lessons              (~13 min)
+📚  Classic — Sherlock Holmes — Red-Headed League      (~59 min)
+📚  Classic — Walden — Economy, part 1                 (~30 min)
+🔬  Quick test — Welcome                               (~9 s)
+🔬  Quick test — TED-style snippet                     (~14 s)
+🔬  Quick test — Storytelling                          (~14 s)
 ```
 
-### Modern business monologues — for transcript testing (committed to git, ~5 MB total)
+### 💼 Business — modern monologues for transcript testing (committed to git, ~5 MB total)
 
-| # | Title | Voice | Length |
-|---|-------|-------|--------|
-| 1 | AI in software engineering, 2026 edition | Aria (US, female) | ~13 min |
-| 2 | Cloud architecture lessons from a decade in distributed systems | Ryan (UK, male) | ~13 min |
+| # | Title | Length |
+|---|-------|--------|
+| 1 | AI in software engineering, 2026 edition | ~13 min |
+| 2 | Cloud architecture lessons from a decade in distributed systems | ~13 min |
 
 These are **bundled with the repo** at `samples/long/business_*.mp3` so
 Teams transcript testing works *immediately after `git clone`*, with no
 internet required on the VM. Vocabulary is intentionally rich in modern
 meeting-transcript terms (*agent*, *telemetry*, *platform*, *SLO*, *blast
 radius*, *idempotency*, …). Topics are deliberately neutral (engineering
-practice, not policy or politics). Regenerate any time:
+practice, not policy or politics). Generated with Microsoft **Edge-TTS**
+(same engine that powers Edge Read-Aloud). Regenerate any time:
 
 ```powershell
 .venv\Scripts\python.exe scripts\generate_business_long_samples.py
 ```
 
-### Classic LibriVox monologues — bonus content (downloaded on demand, ~73 MB)
+### 📚 Classic LibriVox monologues — bonus content (downloaded on demand, ~73 MB)
 
 Optional extra content downloaded from [archive.org](https://archive.org)
 into `samples/long/` (gitignored, not in the repo):
@@ -140,6 +131,16 @@ into `samples/long/` (gitignored, not in the repo):
 | 1 | A Scandal in Bohemia | A. Conan Doyle | ~65 min |
 | 2 | The Red-Headed League | A. Conan Doyle | ~59 min |
 | 3 | Walden — "Economy" pt. 1 | H. D. Thoreau | ~30 min |
+
+### 🔬 Quick test — pipeline verification (committed to git, ~575 KB total)
+
+Three ~10 s clips in `samples/sample_*.mp3` — useful only to verify the
+audio path end-to-end (level meter in Teams reacts) before you start a
+real demo. Too short for transcript work. Re-generate any time:
+
+```powershell
+.venv\Scripts\python.exe scripts\generate_speech_samples.py
+```
 
 The Windows installer attempts the download automatically. It does a
 5-second connectivity preflight to `archive.org`; if that fails (offline,
