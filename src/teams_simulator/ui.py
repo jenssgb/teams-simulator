@@ -424,6 +424,17 @@ class App:
         root_logger.setLevel(logging.INFO)
         root_logger.addHandler(handler)
 
+        # Mirror everything to a file under Desktop\TeamsSimulatorLogs
+        # so the user keeps the log even after the GUI window closes.
+        try:
+            from .logsetup import install_file_logging, get_log_dir
+            log_path = install_file_logging("ui")
+            self._log_file_path = log_path
+            self._append_log(f"Log file: {log_path}")
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log_file_path = None
+            log.warning("could not install file logging: %s", exc)
+
     def _append_log(self, line: str) -> None:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", line + "\n")

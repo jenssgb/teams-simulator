@@ -304,10 +304,15 @@ software.
 
 ## 🩹 Troubleshooting
 
+> **All log files** (installer console, GUI, CLI, diagnostics, crash dumps) land
+> in **`%USERPROFILE%\Desktop\TeamsSimulatorLogs\`** — one folder, easy to zip
+> and send. Override with `$env:TEAMS_SIMULATOR_LOG_DIR` if you want them
+> elsewhere. The folder is created automatically the first time anything runs.
+
 > **First step for ANY device problem:** click **🩺 Diagnostics** in the GUI
 > (or run `setup\diagnose.ps1`). It writes a full report to
-> `setup\_logs\diagnose-*.txt` AND copies it to your clipboard so you can
-> just paste it into a bug report.
+> `Desktop\TeamsSimulatorLogs\diagnose-*.txt` AND copies it to your clipboard so
+> you can just paste it into a bug report.
 
 <details>
 <summary><strong>⚠️ I'm running this inside an RDP / Remote-Desktop session</strong></summary>

@@ -6,6 +6,9 @@
 [CmdletBinding()]
 param()
 
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+$null = Start-LogTranscript -ScriptName 'uninstall-console'
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $VenvPath = Join-Path $RepoRoot '.venv'
 $Downloads = Join-Path $PSScriptRoot '_downloads'

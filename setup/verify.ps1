@@ -21,6 +21,9 @@ param()
 
 $ErrorActionPreference = 'Continue'
 
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+$null = Start-LogTranscript -ScriptName 'verify-console'
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $VenvPy   = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 

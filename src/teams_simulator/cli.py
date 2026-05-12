@@ -84,6 +84,14 @@ def _setup_logging(verbosity: int) -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Mirror to file under Desktop\TeamsSimulatorLogs.
+    try:
+        from .logsetup import install_file_logging
+        log_path = install_file_logging("cli", level=level)
+        logging.getLogger("teams_simulator.cli").info("log file: %s", log_path)
+    except Exception as exc:  # pragma: no cover
+        logging.getLogger("teams_simulator.cli").warning(
+            "could not install file logging: %s", exc)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -19,6 +19,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+$null = Start-LogTranscript -ScriptName 'fix-audio-console'
+
 # Self-elevate if needed
 $current   = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($current)

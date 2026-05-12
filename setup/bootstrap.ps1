@@ -39,6 +39,29 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+# When bootstrap is invoked via 'iex (irm ...)' there is no script file
+# on disk yet, so $PSScriptRoot is empty. Fall back to TEMP for the very
+# first transcript; later install.ps1 will route logs to Desktop properly.
+$bootstrapLogDir = $null
+try {
+    $userDesktop = [Environment]::GetFolderPath('Desktop')
+    if ($userDesktop) {
+        $bootstrapLogDir = Join-Path $userDesktop 'TeamsSimulatorLogs'
+        New-Item -ItemType Directory -Path $bootstrapLogDir -Force -ErrorAction Stop | Out-Null
+    }
+} catch { $bootstrapLogDir = Join-Path $env:TEMP 'TeamsSimulatorLogs'; New-Item -ItemType Directory -Path $bootstrapLogDir -Force -ErrorAction SilentlyContinue | Out-Null }
+
+if ($bootstrapLogDir) {
+    $bootstrapLog = Join-Path $bootstrapLogDir ("bootstrap-console-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+    try {
+        Start-Transcript -Path $bootstrapLog -Append -Force -ErrorAction Stop | Out-Null
+        Write-Host "[log] transcript -> $bootstrapLog" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "[log] transcript could not start: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
 function Test-Cmd([string]$n) { $null -ne (Get-Command $n -ErrorAction SilentlyContinue) }
 function Step([string]$m)     { Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok  ([string]$m)     { Write-Host "    [OK]  $m" -ForegroundColor Green }
@@ -81,5 +104,10 @@ if ($InstallArgs.Trim()) {
     # Split on whitespace (simple but enough for switch-style args).
     $argList += ($InstallArgs.Trim() -split '\s+')
 }
-& powershell.exe @argList
-exit $LASTEXITCODE
+try {
+    & powershell.exe @argList
+    $exit = $LASTEXITCODE
+} finally {
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+}
+exit $exit

@@ -73,12 +73,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+# Shared log-root resolution (always Desktop\TeamsSimulatorLogs if possible)
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+
 # ---------------------------------------------------------------------------
 # Paths / constants
 # ---------------------------------------------------------------------------
 $RepoRoot    = Split-Path -Parent $PSScriptRoot
 $DownloadDir = Join-Path $PSScriptRoot '_downloads'
-$LogDir      = Join-Path $PSScriptRoot '_logs'
+$LogDir      = Get-LogRoot -CallerScriptRoot $PSScriptRoot
 $VenvPath    = Join-Path $RepoRoot '.venv'
 $VenvPy      = Join-Path $VenvPath 'Scripts\python.exe'
 $ScriptPath  = $MyInvocation.MyCommand.Path
@@ -109,6 +112,11 @@ if (-not $LogFile) {
     }
     $LogFile = Join-Path $LogDir ("install-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 }
+
+# Capture the ENTIRE console session (Write-Host, native stderr, the lot)
+# into a separate transcript so the user has the full output even if
+# the terminal window slams shut on a crash.
+$null = Start-LogTranscript -ScriptName 'install-console' -LogRoot $LogDir
 
 function Write-Journal {
     param([string]$Level, [string]$Message, [ConsoleColor]$Color = 'Gray')

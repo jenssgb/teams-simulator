@@ -16,10 +16,16 @@ param()
 $ErrorActionPreference = 'Continue'  # NEVER throw - we want every check to run
 $ProgressPreference    = 'SilentlyContinue'
 
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$LogDir   = Join-Path $PSScriptRoot '_logs'
+$LogDir   = Get-LogRoot -CallerScriptRoot $PSScriptRoot
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 $LogFile  = Join-Path $LogDir ("diagnose-{0}.txt" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+
+# Also capture the live console output (matters when the user closes
+# the window before reading it).
+$null = Start-LogTranscript -ScriptName 'diagnose-console' -LogRoot $LogDir
 
 # Use a shared StringBuilder so we can both print AND save AND copy.
 $sb = [System.Text.StringBuilder]::new()

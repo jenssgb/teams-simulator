@@ -28,6 +28,9 @@
 [CmdletBinding()]
 param()
 
+. (Join-Path $PSScriptRoot '_lib\logroot.ps1')
+$null = Start-LogTranscript -ScriptName 'dryrun-console'
+
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 $here = $PSScriptRoot
