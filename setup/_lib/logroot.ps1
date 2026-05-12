@@ -128,8 +128,13 @@ function Test-InteractiveHost {
           * non-interactive runs    (services, scheduled tasks, CI)
           * stdin-redirected runs   ('iex (irm ...)' pipes the script in)
           * automated test harness  ($env:TEAMS_SIMULATOR_NONINTERACTIVE = 1)
+          * NESTED child scripts    ($env:TEAMS_SIMULATOR_NESTED = 1) -
+              the parent script will do the prompt instead, so the user
+              never has to press Enter more than once for a chain of
+              bootstrap -> install -> verify.
     #>
     if ($env:TEAMS_SIMULATOR_NONINTERACTIVE) { return $false }
+    if ($env:TEAMS_SIMULATOR_NESTED)         { return $false }
     if (-not [Environment]::UserInteractive)  { return $false }
     try {
         if ([Console]::IsInputRedirected)  { return $false }

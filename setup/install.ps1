@@ -731,11 +731,59 @@ function Invoke-Verify {
         Write-Dry "would run: powershell -File $verify"
         return
     }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $verify
+    $prevNested = $env:TEAMS_SIMULATOR_NESTED
+    try {
+        # verify.ps1 should NOT prompt "Press Enter" - install.ps1 will
+        # do exactly one prompt at the very end (or bootstrap if nested).
+        $env:TEAMS_SIMULATOR_NESTED = '1'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $verify
+    } finally {
+        if ($null -eq $prevNested) {
+            Remove-Item Env:TEAMS_SIMULATOR_NESTED -ErrorAction SilentlyContinue
+        } else {
+            $env:TEAMS_SIMULATOR_NESTED = $prevNested
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Warn2 "verify.ps1 exited with code $LASTEXITCODE - some checks failed (see above)"
     } else {
         Write-Ok "verify.ps1 reports all checks green"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Auto-launch the GUI when install completes successfully
+# ---------------------------------------------------------------------------
+function Start-TeamsSimulatorApp {
+    <#
+        Launches the Teams Simulator GUI right after a successful install
+        so the user doesn't have to hunt for the Desktop shortcut. Only
+        called when no reboot is required (otherwise the audio stack
+        hasn't loaded yet and the GUI would just show red "device missing"
+        badges).
+
+        We launch via the .cmd entry point so the GUI inherits the same
+        log-routing (Desktop\TeamsSimulatorLogs) as a manual double-click.
+        Wrapped in try/catch - failure to launch must NEVER fail install.
+    #>
+    if ($script:DryRun) {
+        Write-Dry "would launch: $RepoRoot\teams-simulator.cmd"
+        return
+    }
+    if ($env:TEAMS_SIMULATOR_NONINTERACTIVE) { return }
+    if (-not [Environment]::UserInteractive)  { return }
+
+    $entry = Join-Path $RepoRoot 'teams-simulator.cmd'
+    if (-not (Test-Path $entry)) {
+        Write-Warn2 "teams-simulator.cmd not found at $entry - skipping auto-launch"
+        return
+    }
+    try {
+        Write-Step "launching Teams Simulator"
+        Start-Process -FilePath $entry -WorkingDirectory $RepoRoot -WindowStyle Hidden
+        Write-Ok "Teams Simulator started - look for the window in a moment"
+    } catch {
+        Write-Warn2 "failed to auto-launch Teams Simulator: $($_.Exception.Message) (use the Desktop shortcut)"
     }
 }
 
@@ -885,13 +933,13 @@ if ($ContinueAfterReboot) {
         Write-Host ""
         Write-Host "============================================================" -ForegroundColor Green
         Write-Host " Setup complete." -ForegroundColor Green
-        Write-Host " Launch the app via the 'Teams Simulator' icon on your Desktop" -ForegroundColor Green
-        Write-Host " (or in the Start Menu)." -ForegroundColor Green
+        Write-Host " Launching Teams Simulator..." -ForegroundColor Green
         Write-Host ""
         Write-Host " In Teams pick:" -ForegroundColor Green
         Write-Host "   Microphone : 'CABLE Output' (any '(VB-Audio ...)' variant)" -ForegroundColor Gray
         Write-Host "   Camera     : 'OBS Virtual Camera'" -ForegroundColor Gray
         Write-Host "============================================================" -ForegroundColor Green
+        Start-TeamsSimulatorApp
     } catch {
         $resumeError = $_
         Write-Host ""
@@ -1001,5 +1049,8 @@ if ($script:RebootRequired) {
     exit 2
 }
 
+# Happy path: install + verify done, no reboot needed. Open the GUI for
+# the user instead of making them hunt for the Desktop shortcut.
+Start-TeamsSimulatorApp
 Wait-ForExit
 exit 0

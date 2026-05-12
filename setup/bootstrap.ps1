@@ -105,12 +105,18 @@ if ($InstallArgs.Trim()) {
     $argList += ($InstallArgs.Trim() -split '\s+')
 }
 try {
+    # Mark the install (+verify) call as nested so they don't each show
+    # their own "Press Enter to close" prompt - bootstrap will do the
+    # ONE final prompt at the very end instead.
+    $env:TEAMS_SIMULATOR_NESTED = '1'
     & powershell.exe @argList
     $exit = $LASTEXITCODE
 } finally {
+    Remove-Item Env:TEAMS_SIMULATOR_NESTED -ErrorAction SilentlyContinue
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
     # User-friendly: never let the window close before the user has
-    # seen whether bootstrap succeeded.
+    # seen whether bootstrap succeeded. (One prompt total - install + verify
+    # were nested and skipped theirs.)
     Write-Host ""
     if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $env:TEAMS_SIMULATOR_NONINTERACTIVE) {
         Write-Host "Press Enter to close this window..." -ForegroundColor Cyan
