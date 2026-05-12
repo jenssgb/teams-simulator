@@ -69,14 +69,37 @@ class _TkLogHandler(logging.Handler):
 class App:
     POLL_MS = 100  # how often we refresh status & drain the log queue
 
+    # ── Light hipster palette, Teams-purple accent ────────────────────────
+    COLORS = {
+        "bg":            "#fafafa",
+        "surface":       "#ffffff",
+        "border":        "#e5e5e5",
+        "border_strong": "#d1d1d1",
+        "text":          "#242424",
+        "text_muted":    "#616161",
+        "text_dim":      "#8a8a8a",
+        "accent":        "#6264a7",   # Teams purple
+        "accent_hover":  "#5558a3",
+        "accent_active": "#464775",
+        "accent_text":   "#ffffff",
+        "ok":            "#107c10",
+        "ok_bg":         "#e6f4ea",
+        "warn":          "#7a5a00",
+        "warn_bg":       "#fff4cc",
+        "err":           "#a4262c",
+        "err_bg":        "#fde7e9",
+        "info_bg":       "#eef2ff",
+        "chip_idle_bg":  "#eef0f2",
+        "chip_idle_fg":  "#616161",
+    }
+
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("Teams Simulator")
-        # Tall enough that the controls + banner are visible without
-        # scrolling; log is collapsed by default so we don't need a huge
-        # window.
-        root.geometry("760x620")
-        root.minsize(720, 560)
+        # Compact window; auto-sizes to content.  minsize keeps the layout
+        # from collapsing when the user shrinks the window.
+        root.minsize(700, 0)
+        self._apply_theme()
 
         # State -----------------------------------------------------------
         self.controller: Optional[SimulatorController] = None
@@ -143,37 +166,165 @@ class App:
         self.root.after(self.POLL_MS, self._poll)
 
     # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+    def _apply_theme(self) -> None:
+        """Configure ttk styles + window background for a clean, modern look.
+
+        Uses the ``clam`` ttk theme as a base because it lets us actually
+        repaint button / progressbar / combobox backgrounds (the native
+        Windows theme ignores most colour overrides).
+        """
+        c = self.COLORS
+        self.root.configure(bg=c["bg"])
+
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        body_font = ("Segoe UI Variable", 10)
+        bold_font = ("Segoe UI Variable", 10, "bold")
+        small_font = ("Segoe UI Variable", 9)
+
+        # --- Frames + Labels ------------------------------------------
+        style.configure("TFrame", background=c["bg"])
+        style.configure("TLabel", background=c["bg"], foreground=c["text"],
+                        font=body_font)
+        style.configure("Heading.TLabel", background=c["bg"],
+                        foreground=c["text_muted"], font=small_font)
+        style.configure("Muted.TLabel", background=c["bg"],
+                        foreground=c["text_dim"], font=small_font)
+        style.configure("TCheckbutton", background=c["bg"],
+                        foreground=c["text"], font=body_font,
+                        focuscolor=c["bg"])
+        style.map("TCheckbutton",
+                  background=[("active", c["bg"])],
+                  foreground=[("disabled", c["text_dim"])])
+
+        # --- Buttons --------------------------------------------------
+        # Default ttk button = secondary/ghost style (outline-ish).
+        style.configure("TButton", padding=(12, 6), relief="flat",
+                        borderwidth=1, font=body_font,
+                        foreground=c["text"], background=c["surface"],
+                        bordercolor=c["border_strong"],
+                        lightcolor=c["surface"], darkcolor=c["surface"])
+        style.map("TButton",
+                  background=[("active", "#f3f3f3"), ("pressed", "#ebebeb"),
+                              ("disabled", c["surface"])],
+                  foreground=[("disabled", c["text_dim"])],
+                  bordercolor=[("active", c["border_strong"]),
+                               ("focus", c["accent"])])
+
+        # Primary = filled accent (Start).
+        style.configure("Primary.TButton", padding=(16, 7), relief="flat",
+                        borderwidth=0, font=bold_font,
+                        foreground=c["accent_text"], background=c["accent"],
+                        bordercolor=c["accent"],
+                        lightcolor=c["accent"], darkcolor=c["accent"])
+        style.map("Primary.TButton",
+                  background=[("active", c["accent_hover"]),
+                              ("pressed", c["accent_active"]),
+                              ("disabled", "#bcbcd5")],
+                  foreground=[("disabled", "#ffffff")])
+
+        # Icon = small square button for ⟳ / 🩺.
+        style.configure("Icon.TButton", padding=(8, 6), relief="flat",
+                        borderwidth=1, font=("Segoe UI", 11),
+                        foreground=c["text"], background=c["surface"],
+                        bordercolor=c["border_strong"],
+                        lightcolor=c["surface"], darkcolor=c["surface"])
+        style.map("Icon.TButton",
+                  background=[("active", "#f3f3f3"), ("pressed", "#ebebeb")])
+
+        # --- Combobox -------------------------------------------------
+        style.configure("TCombobox", padding=6, font=body_font,
+                        foreground=c["text"], fieldbackground=c["surface"],
+                        background=c["surface"], bordercolor=c["border_strong"],
+                        lightcolor=c["border_strong"],
+                        darkcolor=c["border_strong"],
+                        arrowcolor=c["text_muted"],
+                        selectbackground=c["accent"],
+                        selectforeground=c["accent_text"])
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", c["surface"])],
+                  foreground=[("readonly", c["text"])],
+                  bordercolor=[("focus", c["accent"]),
+                               ("active", c["accent"])])
+        # Dropdown listbox colours (option-db, ttk doesn't expose these).
+        self.root.option_add("*TCombobox*Listbox.background", c["surface"])
+        self.root.option_add("*TCombobox*Listbox.foreground", c["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", c["accent"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", c["accent_text"])
+        self.root.option_add("*TCombobox*Listbox.font", body_font)
+
+        # --- Progressbars --------------------------------------------
+        style.configure("Accent.Horizontal.TProgressbar",
+                        background=c["accent"], troughcolor="#ececec",
+                        bordercolor="#ececec",
+                        lightcolor=c["accent"], darkcolor=c["accent"],
+                        thickness=10)
+        style.configure("Level.Horizontal.TProgressbar",
+                        background=c["ok"], troughcolor="#ececec",
+                        bordercolor="#ececec",
+                        lightcolor=c["ok"], darkcolor=c["ok"],
+                        thickness=4)
+
+        # --- Scrollbar (log) -----------------------------------------
+        style.configure("Vertical.TScrollbar",
+                        background=c["bg"], troughcolor=c["bg"],
+                        bordercolor=c["bg"], arrowcolor=c["text_muted"],
+                        lightcolor=c["bg"], darkcolor=c["bg"])
+
+    def _fit_window(self) -> None:
+        """Let Tk shrink/grow the window to the natural content size."""
+        try:
+            self.root.update_idletasks()
+            self.root.geometry("")
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        outer_pad = {"padx": 12, "pady": 6}
+        c = self.COLORS
+        outer_pad = {"padx": 14, "pady": 6}
 
         # ── Compact device strip + diagnostics buttons ───────────────────
         dev_row = ttk.Frame(self.root)
-        dev_row.pack(fill="x", padx=12, pady=(10, 4))
-        self.dev_mic_label = ttk.Label(dev_row, text="🎙 checking…",
-                                       font=("Segoe UI", 10))
-        self.dev_mic_label.pack(side="left", padx=(0, 16))
-        self.dev_cam_label = ttk.Label(dev_row, text="📷 checking…",
-                                       font=("Segoe UI", 10))
+        dev_row.pack(fill="x", padx=14, pady=(12, 6))
+        # Pill-shaped chips (tk.Label so we can control bg).
+        self.dev_mic_label = tk.Label(
+            dev_row, text="🎙  checking…",
+            bg=c["chip_idle_bg"], fg=c["chip_idle_fg"],
+            padx=10, pady=4, font=("Segoe UI Variable", 9), bd=0,
+        )
+        self.dev_mic_label.pack(side="left", padx=(0, 8))
+        self.dev_cam_label = tk.Label(
+            dev_row, text="📷  checking…",
+            bg=c["chip_idle_bg"], fg=c["chip_idle_fg"],
+            padx=10, pady=4, font=("Segoe UI Variable", 9), bd=0,
+        )
         self.dev_cam_label.pack(side="left")
-        ttk.Button(dev_row, text="⟳", width=3, command=self._refresh_device_status).pack(
-            side="right", padx=(2, 0)
+        ttk.Button(dev_row, text="⟳", width=3, style="Icon.TButton",
+                   command=self._refresh_device_status).pack(
+            side="right", padx=(4, 0)
         )
-        ttk.Button(dev_row, text="🩺", width=3, command=self._run_diagnostics).pack(
-            side="right"
-        )
+        ttk.Button(dev_row, text="🩺", width=3, style="Icon.TButton",
+                   command=self._run_diagnostics).pack(side="right")
 
         # ── RDP warning (only when actually inside an RDP session) ───────
         import os as _os
         if _os.environ.get("SESSIONNAME", "").upper().startswith("RDP"):
-            rdp_strip = tk.Frame(self.root, bg="#fff3cd", bd=0)
-            rdp_strip.pack(fill="x", padx=12, pady=(0, 4))
+            rdp_strip = tk.Frame(self.root, bg=c["warn_bg"], bd=0)
+            rdp_strip.pack(fill="x", padx=14, pady=(0, 4))
             tk.Label(
-                rdp_strip, bg="#fff3cd", fg="#856404",
+                rdp_strip, bg=c["warn_bg"], fg=c["warn"],
                 text=("⚠  RDP session detected — set 'Play on this computer' "
                       "in your RDP client, or Teams won't see audio."),
-                font=("Segoe UI", 9), padx=8, pady=4, anchor="w",
+                font=("Segoe UI Variable", 9), padx=10, pady=6, anchor="w",
                 wraplength=720, justify="left",
             ).pack(fill="x")
 
@@ -183,36 +334,37 @@ class App:
 
         # Avatar preview pinned right.
         if self._avatars:
-            self.avatar_preview = ttk.Label(inp_outer, borderwidth=1,
-                                            relief="solid", anchor="center")
-            self.avatar_preview.pack(side="right", padx=(12, 0))
+            self.avatar_preview = tk.Label(
+                inp_outer, bg=c["surface"],
+                bd=1, relief="solid", highlightthickness=0,
+                anchor="center",
+            )
+            self.avatar_preview.pack(side="right", padx=(14, 0))
 
         inp = ttk.Frame(inp_outer)
         inp.pack(side="left", fill="x", expand=True)
 
-        bold = ("Segoe UI", 9, "bold")
-
         # Avatar row
         if self._avatars:
-            ttk.Label(inp, text="Avatar", font=bold).grid(
-                row=0, column=0, sticky="w", padx=(0, 12), pady=4
+            ttk.Label(inp, text="AVATAR", style="Heading.TLabel").grid(
+                row=0, column=0, sticky="w", padx=(0, 12), pady=(0, 2)
             )
             avatar_combo = ttk.Combobox(
                 inp, textvariable=self.avatar_var,
                 values=[a.label for a in self._avatars],
                 state="readonly", width=24,
             )
-            avatar_combo.grid(row=0, column=1, sticky="w", pady=4)
+            avatar_combo.grid(row=0, column=1, sticky="we", pady=(0, 2))
             avatar_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_avatar_selected())
-            ttk.Button(inp, text="📁", width=3,
-                       command=self._pick_image).grid(row=0, column=2, padx=(8, 0), pady=4)
+            ttk.Button(inp, text="📁", width=3, style="Icon.TButton",
+                       command=self._pick_image).grid(row=0, column=2, padx=(8, 0), pady=(0, 2))
             if not self.avatar_var.get():
                 self.avatar_var.set(self._avatars[0].label)
             self._on_avatar_selected()
 
         # Audio row
-        ttk.Label(inp, text="Audio", font=bold).grid(
-            row=1, column=0, sticky="w", padx=(0, 12), pady=4
+        ttk.Label(inp, text="AUDIO", style="Heading.TLabel").grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=(8, 2)
         )
         if self._speech_samples:
             sample_combo = ttk.Combobox(
@@ -220,25 +372,24 @@ class App:
                 values=[label for label, _ in self._speech_samples],
                 state="readonly",
             )
-            sample_combo.grid(row=1, column=1, sticky="we", pady=4)
+            sample_combo.grid(row=1, column=1, sticky="we", pady=(8, 2))
             sample_combo.bind("<<ComboboxSelected>>", self._on_sample_chosen)
         else:
             ttk.Label(inp, text="(no bundled samples found)",
-                      foreground="#888888").grid(row=1, column=1, sticky="w", pady=4)
-        ttk.Button(inp, text="📁", width=3,
-                   command=self._pick_audio).grid(row=1, column=2, padx=(8, 0), pady=4)
+                      style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=(8, 2))
+        ttk.Button(inp, text="📁", width=3, style="Icon.TButton",
+                   command=self._pick_audio).grid(row=1, column=2, padx=(8, 0), pady=(8, 2))
 
-        # Muted path under the audio dropdown — keeps the path visible
-        # for power-users without screaming an editable Entry at everyone.
+        # Muted path under the audio dropdown.
         self.audio_path_display = tk.StringVar()
         self._update_audio_display()
         self.audio_path.trace_add("write", lambda *_: self._update_audio_display())
         ttk.Label(inp, textvariable=self.audio_path_display,
-                  foreground="#888888", font=("Segoe UI", 8)).grid(
+                  style="Muted.TLabel").grid(
             row=2, column=1, columnspan=2, sticky="w", pady=(0, 4)
         )
 
-        # Loop-audio inline (no dedicated Options panel for ONE checkbox).
+        # Loop-audio inline.
         ttk.Checkbutton(inp, text="Loop audio", variable=self.loop_var).grid(
             row=3, column=1, sticky="w", pady=(2, 4)
         )
@@ -249,65 +400,72 @@ class App:
         pb = ttk.Frame(self.root)
         pb.pack(fill="x", **outer_pad)
 
-        # Slimmer color-coded status banner.
-        self.banner_frame = tk.Frame(pb, bg="#e0e0e0", bd=0,
-                                     relief="flat", height=52)
-        self.banner_frame.pack(fill="x", pady=(0, 6))
+        # Banner: 4-px coloured accent stripe on the left + tinted body.
+        # Looks more modern than a single-colour full-bleed bar.
+        self.banner_frame = tk.Frame(pb, bg=c["bg"], bd=0, height=64)
+        self.banner_frame.pack(fill="x", pady=(2, 8))
         self.banner_frame.pack_propagate(False)
+        self.banner_accent = tk.Frame(self.banner_frame, width=4,
+                                      bg=c["chip_idle_fg"], bd=0)
+        self.banner_accent.pack(side="left", fill="y")
+        self.banner_body = tk.Frame(self.banner_frame, bg=c["info_bg"], bd=0)
+        self.banner_body.pack(side="left", fill="both", expand=True)
         self.banner_label = tk.Label(
-            self.banner_frame, textvariable=self.banner_text,
-            bg="#e0e0e0", fg="#333333",
-            font=("Segoe UI", 14, "bold"), anchor="w", padx=12,
+            self.banner_body, textvariable=self.banner_text,
+            bg=c["info_bg"], fg=c["text"],
+            font=("Segoe UI Variable", 13, "bold"), anchor="w", padx=14,
         )
-        self.banner_label.pack(side="top", fill="x", pady=(4, 0))
+        self.banner_label.pack(side="top", fill="x", pady=(8, 0))
         self.banner_detail_label = tk.Label(
-            self.banner_frame, textvariable=self.banner_detail,
-            bg="#e0e0e0", fg="#555555",
-            font=("Segoe UI", 9), anchor="w", padx=12, justify="left",
+            self.banner_body, textvariable=self.banner_detail,
+            bg=c["info_bg"], fg=c["text_muted"],
+            font=("Segoe UI Variable", 9), anchor="w", padx=14, justify="left",
         )
-        self.banner_detail_label.pack(side="top", fill="x", pady=(0, 4))
+        self.banner_detail_label.pack(side="top", fill="x", pady=(0, 8))
 
-        # Buttons
+        # Buttons — Start = primary purple, Pause/Stop = ghost outline.
         btn_row = ttk.Frame(pb)
-        btn_row.pack(fill="x", pady=(2, 6))
+        btn_row.pack(fill="x", pady=(2, 8))
         self.btn_start = ttk.Button(btn_row, text="▶  Start",
-                                    command=self._on_start, width=12)
-        self.btn_start.pack(side="left", padx=(0, 4))
+                                    style="Primary.TButton",
+                                    command=self._on_start)
+        self.btn_start.pack(side="left", padx=(0, 6))
         self.btn_pause = ttk.Button(btn_row, text="⏸  Pause",
                                     command=self._on_pause,
-                                    state="disabled", width=12)
+                                    state="disabled")
         self.btn_pause.pack(side="left", padx=4)
         self.btn_stop = ttk.Button(btn_row, text="⏹  Stop",
                                    command=self._on_stop,
-                                   state="disabled", width=12)
+                                   state="disabled")
         self.btn_stop.pack(side="left", padx=4)
 
-        # Progress + position + countdown — three signals, one row each
-        # but no labelled sub-headers (the bars speak for themselves).
+        # Audio progress + countdown.
         prog_row = ttk.Frame(pb)
         prog_row.pack(fill="x", pady=(4, 0))
         self.audio_progress_bar = ttk.Progressbar(
             prog_row, orient="horizontal", mode="determinate",
+            style="Accent.Horizontal.TProgressbar",
             maximum=100.0, variable=self.audio_progress,
         )
         self.audio_progress_bar.pack(side="left", fill="x", expand=True)
         self.position_label = ttk.Label(prog_row, textvariable=self.position_text,
-                                        font=("Consolas", 10), width=14, anchor="e")
+                                        font=("Cascadia Mono", 9), width=14, anchor="e")
         self.position_label.pack(side="right", padx=(8, 0))
         self.remaining_label = ttk.Label(pb, textvariable=self.time_remaining,
-                                         font=("Segoe UI", 9), foreground="#666666")
+                                         style="Muted.TLabel")
         self.remaining_label.pack(anchor="e", pady=(2, 0))
 
-        # Live audio level — slim bar, no header.
+        # Live audio level — slim accent-coloured bar.
         self.level_bar = ttk.Progressbar(
             pb, orient="horizontal", mode="determinate",
+            style="Level.Horizontal.TProgressbar",
             maximum=100.0, variable=self.audio_level,
         )
         self.level_bar.pack(fill="x", pady=(8, 0))
 
         # ── Collapsible log ──────────────────────────────────────────────
         log_outer = ttk.Frame(self.root)
-        log_outer.pack(fill="both", expand=True, padx=12, pady=(8, 10))
+        log_outer.pack(fill="both", expand=True, padx=14, pady=(10, 12))
         toggle_row = ttk.Frame(log_outer)
         toggle_row.pack(fill="x")
         self.log_visible = False
@@ -321,13 +479,17 @@ class App:
         if hasattr(self, "_log_file_path") and self._log_file_path:
             ttk.Label(toggle_row,
                       text=f"  →  {Path(self._log_file_path).name}",
-                      foreground="#888888", font=("Segoe UI", 8)).pack(
+                      style="Muted.TLabel").pack(
                 side="left", padx=(8, 0)
             )
 
         self.log_container = ttk.Frame(log_outer)
         self.log_text = tk.Text(self.log_container, height=10, wrap="word",
-                                state="disabled", font=("Consolas", 9))
+                                state="disabled", font=("Cascadia Mono", 9),
+                                bg=c["surface"], fg=c["text"],
+                                bd=1, relief="solid",
+                                highlightthickness=0,
+                                insertbackground=c["text"])
         scroll = ttk.Scrollbar(self.log_container, orient="vertical",
                                command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
@@ -336,6 +498,8 @@ class App:
         # log_container intentionally NOT packed yet — collapsed by default.
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Let Tk pick the natural size now that all widgets exist.
+        self._fit_window()
 
     # ------------------------------------------------------------------
     # Small UI helpers
@@ -349,6 +513,9 @@ class App:
             self.log_container.pack(fill="both", expand=True, pady=(4, 0))
             self.log_visible = True
             self._update_log_toggle_text()
+        # Re-fit the window so we don't end up with a giant empty area
+        # when the log is collapsed.
+        self._fit_window()
 
     def _update_log_toggle_text(self) -> None:
         arrow = "▼" if self.log_visible else "▶"
@@ -684,21 +851,21 @@ class App:
         threading.Thread(target=probe, daemon=True).start()
 
     def _apply_device_status(self, mic_ok: bool, mic_msg: str, cam_ok: bool, cam_msg: str) -> None:
-        # Compact one-liners for the new minimal device strip; full
-        # diagnostic message goes to the log so power-users can still
-        # see the underlying detail.
+        # Pill-chip device strip.  Uses tinted backgrounds so the user
+        # can spot a missing device at a glance without reading text.
+        c = self.COLORS
         if mic_ok:
-            self.dev_mic_label.config(text="🎙 CABLE Output  ✓",
-                                      foreground="#0a6f10")
+            self.dev_mic_label.config(text="🎙  CABLE Output  ✓",
+                                      bg=c["ok_bg"], fg=c["ok"])
         else:
-            self.dev_mic_label.config(text="🎙 mic missing  ✗  · click 🩺",
-                                      foreground="#922b21")
+            self.dev_mic_label.config(text="🎙  mic missing  ·  click 🩺",
+                                      bg=c["err_bg"], fg=c["err"])
         if cam_ok:
-            self.dev_cam_label.config(text="📷 OBS Virtual Camera  ✓",
-                                      foreground="#0a6f10")
+            self.dev_cam_label.config(text="📷  OBS Virtual Camera  ✓",
+                                      bg=c["ok_bg"], fg=c["ok"])
         else:
-            self.dev_cam_label.config(text="📷 cam missing  ✗  · click 🩺",
-                                      foreground="#922b21")
+            self.dev_cam_label.config(text="📷  cam missing  ·  click 🩺",
+                                      bg=c["err_bg"], fg=c["err"])
         # Mirror the verbose status to the log for support / debugging.
         self._append_log(f"DEV    {'OK ' if mic_ok else 'FAIL'}  {mic_msg}")
         self._append_log(f"DEV    {'OK ' if cam_ok else 'FAIL'}  {cam_msg}")
@@ -743,16 +910,19 @@ class App:
                 self._set_banner("starting", label, "Please wait — audio + virtual devices are coming online.")
 
     def _set_banner(self, kind: str, text: str, detail: str = "") -> None:
-        # Five visual states; colors hand-picked to be calm but unambiguous.
+        # Banner = coloured left accent stripe + tinted body.
+        # Six visual states; calm tints kept consistent with chip colours.
+        c = self.COLORS
         palette = {
-            "idle":     ("● IDLE",        "#e0e0e0", "#333333", "#555555"),
-            "starting": ("⏳ STARTING…",  "#fff4cc", "#7a5a00", "#7a5a00"),
-            "running":  ("● STREAMING",  "#d4f4d4", "#0a6f10", "#0a6f10"),
-            "paused":   ("⏸ PAUSED",     "#fde7b1", "#8a5a00", "#8a5a00"),
-            "stopping": ("⏳ STOPPING…",  "#fff4cc", "#7a5a00", "#7a5a00"),
-            "error":    ("✖ ERROR",      "#fadbd8", "#922b21", "#922b21"),
+            #             prefix              accent           body bg          title fg         detail fg
+            "idle":     ("● IDLE",            c["chip_idle_fg"], c["info_bg"],   c["text"],       c["text_muted"]),
+            "starting": ("⏳ STARTING…",      c["warn"],         c["warn_bg"],   c["warn"],       c["warn"]),
+            "running":  ("● STREAMING",      c["ok"],           c["ok_bg"],     c["ok"],         c["ok"]),
+            "paused":   ("⏸ PAUSED",         c["warn"],         c["warn_bg"],   c["warn"],       c["warn"]),
+            "stopping": ("⏳ STOPPING…",      c["warn"],         c["warn_bg"],   c["warn"],       c["warn"]),
+            "error":    ("✖ ERROR",          c["err"],          c["err_bg"],    c["err"],        c["err"]),
         }
-        prefix, bg, fg, fg_detail = palette.get(kind, palette["idle"])
+        prefix, accent, body_bg, fg, fg_detail = palette.get(kind, palette["idle"])
         # If caller passed a custom text use it raw; otherwise prepend prefix.
         if not text:
             text = prefix
@@ -760,9 +930,10 @@ class App:
             text = f"{prefix}   {text}"
         self.banner_text.set(text)
         self.banner_detail.set(detail)
-        self.banner_frame.configure(bg=bg)
-        self.banner_label.configure(bg=bg, fg=fg)
-        self.banner_detail_label.configure(bg=bg, fg=fg_detail)
+        self.banner_accent.configure(bg=accent)
+        self.banner_body.configure(bg=body_bg)
+        self.banner_label.configure(bg=body_bg, fg=fg)
+        self.banner_detail_label.configure(bg=body_bg, fg=fg_detail)
 
     def _on_start(self) -> None:
         if self._busy:
