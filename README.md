@@ -88,8 +88,8 @@ manifest-driven (`samples/avatars/avatars.json`).
 
 ## 🎙️ Bundled English speech samples
 
-Two tiers of English speech samples ship with the simulator so you can
-go from zero to "Teams transcript flowing" in one click:
+Three tiers of English speech ship with the simulator so you can go from
+zero to "Teams transcript flowing" in one click:
 
 ### Short — instant verification (committed to git, ~575 KB total)
 
@@ -112,24 +112,28 @@ or change the scripts/voices any time:
 .venv\Scripts\python.exe scripts\generate_speech_samples.py
 ```
 
-### Long — for transcript-grade testing (downloaded/generated on demand, ~77 MB)
-
-Two flavours of long, single-narrator English monologues, both relevant
-to the Teams transcript / live-captions pipeline:
-
-**📊 Modern business monologues** (~4 MB, generated locally with Edge-TTS):
+### Modern business monologues — for transcript testing (committed to git, ~5 MB total)
 
 | # | Title | Voice | Length |
 |---|-------|-------|--------|
 | 1 | AI in software engineering, 2026 edition | Aria (US, female) | ~13 min |
 | 2 | Cloud architecture lessons from a decade in distributed systems | Ryan (UK, male) | ~13 min |
 
-These give your transcript test something that actually sounds like a
-modern engineering all-hands — vocabulary like *agent*, *telemetry*,
-*platform*, *SLO*, *blast radius*, *idempotency*, etc. Topics are
-deliberately neutral (engineering practice, not policy or politics).
+These are **bundled with the repo** at `samples/long/business_*.mp3` so
+Teams transcript testing works *immediately after `git clone`*, with no
+internet required on the VM. Vocabulary is intentionally rich in modern
+meeting-transcript terms (*agent*, *telemetry*, *platform*, *SLO*, *blast
+radius*, *idempotency*, …). Topics are deliberately neutral (engineering
+practice, not policy or politics). Regenerate any time:
 
-**🎙️ Classic public-domain audiobook chapters** (~73 MB, downloaded from LibriVox):
+```powershell
+.venv\Scripts\python.exe scripts\generate_business_long_samples.py
+```
+
+### Classic LibriVox monologues — bonus content (downloaded on demand, ~73 MB)
+
+Optional extra content downloaded from [archive.org](https://archive.org)
+into `samples/long/` (gitignored, not in the repo):
 
 | # | Title | Author | Length |
 |---|-------|--------|--------|
@@ -137,12 +141,13 @@ deliberately neutral (engineering practice, not policy or politics).
 | 2 | The Red-Headed League | A. Conan Doyle | ~59 min |
 | 3 | Walden — "Economy" pt. 1 | H. D. Thoreau | ~30 min |
 
-The Windows installer fetches/generates them automatically into
-`samples/long/` (gitignored, not in the repo). Skipped silently if
-you're offline — the GUI just shows fewer entries. Manual re-run any time:
+The Windows installer attempts the download automatically. It does a
+5-second connectivity preflight to `archive.org`; if that fails (offline,
+corporate firewall, etc.) the download is **skipped silently** — the
+business monologues above are already on disk and provide ~26 minutes of
+transcript-grade content. Manual re-run any time:
 
 ```powershell
-.venv\Scripts\python.exe scripts\generate_business_long_samples.py
 .venv\Scripts\python.exe scripts\download_long_samples.py
 ```
 
@@ -304,10 +309,14 @@ software.
 
 ## 🩹 Troubleshooting
 
-> **All log files** (installer console, GUI, CLI, diagnostics, crash dumps) land
-> in **`%USERPROFILE%\Desktop\TeamsSimulatorLogs\`** — one folder, easy to zip
+> **All log files** (installer console transcripts, GUI, CLI, diagnostics,
+> faulthandler crash dumps, launcher fallback) land in
+> **`%USERPROFILE%\Desktop\TeamsSimulatorLogs\`** — one folder, easy to zip
 > and send. Override with `$env:TEAMS_SIMULATOR_LOG_DIR` if you want them
-> elsewhere. The folder is created automatically the first time anything runs.
+> elsewhere. The folder is created automatically the first time anything
+> runs. Every console window also waits for *Press Enter to close…* before
+> exiting, so an error is never invisible. Set
+> `$env:TEAMS_SIMULATOR_NONINTERACTIVE=1` to skip those prompts in CI.
 
 > **First step for ANY device problem:** click **🩺 Diagnostics** in the GUI
 > (or run `setup\diagnose.ps1`). It writes a full report to
