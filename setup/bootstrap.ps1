@@ -109,5 +109,12 @@ try {
     $exit = $LASTEXITCODE
 } finally {
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+    # User-friendly: never let the window close before the user has
+    # seen whether bootstrap succeeded.
+    Write-Host ""
+    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $env:TEAMS_SIMULATOR_NONINTERACTIVE) {
+        Write-Host "Press Enter to close this window..." -ForegroundColor Cyan
+        try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
+    }
 }
 exit $exit

@@ -214,4 +214,5 @@ Write-Host ("Dry-run summary: {0} pass, {1} warn, {2} FAIL" -f $script:passed, $
     -ForegroundColor Magenta
 Write-Host ("=" * 60) -ForegroundColor Magenta
 
+Wait-ForExit
 if ($script:failed -gt 0) { exit 1 } else { exit 0 }

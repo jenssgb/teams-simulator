@@ -120,3 +120,47 @@ function Stop-LogTranscript {
     param()
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
 }
+
+function Test-InteractiveHost {
+    <#
+        Returns $true when there is a real human at the keyboard who can
+        press Enter. We skip the "Press Enter to close" prompt in:
+          * non-interactive runs    (services, scheduled tasks, CI)
+          * stdin-redirected runs   ('iex (irm ...)' pipes the script in)
+          * automated test harness  ($env:TEAMS_SIMULATOR_NONINTERACTIVE = 1)
+    #>
+    if ($env:TEAMS_SIMULATOR_NONINTERACTIVE) { return $false }
+    if (-not [Environment]::UserInteractive)  { return $false }
+    try {
+        if ([Console]::IsInputRedirected)  { return $false }
+    } catch {
+        # Some hosts (ISE) throw on IsInputRedirected; treat as interactive.
+    }
+    return $true
+}
+
+function Wait-ForExit {
+    <#
+        Standard "press Enter to close this window" prompt used at the
+        end of every Teams-Simulator PowerShell script so the console
+        window never slams shut on the user before they read the result.
+
+        Always safe to call - no-op when non-interactive.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Message = 'Press Enter to close this window...',
+        [int]$FallbackSleepSeconds = 30
+    )
+    if (-not (Test-InteractiveHost)) { return }
+
+    Write-Host ""
+    Write-Host $Message -ForegroundColor Cyan
+    try {
+        [void](Read-Host)
+    } catch {
+        # Some hosts can't Read-Host (no console); give the user a few
+        # seconds to read the screen before the window vanishes.
+        Start-Sleep -Seconds $FallbackSleepSeconds
+    }
+}

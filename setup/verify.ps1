@@ -222,9 +222,11 @@ if ($fail -eq 0) {
     Write-Host "   Camera     -> 'OBS Virtual Camera'" -ForegroundColor White
     Write-Host "Then:" -ForegroundColor Green
     Write-Host "   .\.venv\Scripts\python.exe -m teams_simulator" -ForegroundColor White
+    Wait-ForExit
     exit 0
 } else {
     Write-Host "Verification failed: $fail failure(s), $ok passed." -ForegroundColor Red
     Write-Host "Re-run setup\install.ps1 (as Administrator) to fix - it is idempotent." -ForegroundColor Yellow
+    Wait-ForExit
     exit 1
 }

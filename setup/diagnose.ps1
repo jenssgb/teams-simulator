@@ -250,6 +250,4 @@ if ($copied) {
 }
 Write-Host (" Saved to: {0}" -f $LogFile) -ForegroundColor Gray
 Write-Host "============================================================" -ForegroundColor Magenta
-Write-Host ""
-Write-Host "Press Enter to close this window..." -ForegroundColor Cyan
-try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
+Wait-ForExit

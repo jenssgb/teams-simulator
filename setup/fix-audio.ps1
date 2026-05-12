@@ -118,6 +118,4 @@ Write-Host "   3. Open Device Manager, find 'VB-Audio Virtual Cable'" -Foregroun
 Write-Host "      under 'Sound, video and game controllers',"        -ForegroundColor Gray
 Write-Host "      right-click -> Disable, then Enable."              -ForegroundColor Gray
 Write-Host "============================================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "Press Enter to close this window..." -ForegroundColor Cyan
-try { [void](Read-Host) } catch { Start-Sleep -Seconds 30 }
+Wait-ForExit

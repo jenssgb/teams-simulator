@@ -22,3 +22,5 @@ Write-Host "  - VB-Audio Virtual Cable" -ForegroundColor Gray
 Write-Host "  - OBS Studio" -ForegroundColor Gray
 Write-Host "  - ffmpeg (Gyan.FFmpeg) - winget uninstall Gyan.FFmpeg" -ForegroundColor Gray
 Write-Host "  - Python 3.11 - winget uninstall Python.Python.3.11" -ForegroundColor Gray
+
+Wait-ForExit

@@ -957,6 +957,7 @@ if ($script:RebootRequired) {
     if ($NoReboot) {
         Write-Warn2 "VB-Cable was just installed - reboot required, but -NoReboot was passed."
         Write-Warn2 "Reboot manually, then re-run: .\setup\install.ps1"
+        Wait-ForExit
         exit 2
     }
 
@@ -996,7 +997,9 @@ if ($script:RebootRequired) {
 
     Write-Warn2 "Reboot skipped. Teams will NOT see the microphone until you reboot."
     Write-Warn2 "When you're ready: run  shutdown /r /t 0  -- the resume task is already registered."
+    Wait-ForExit
     exit 2
 }
 
+Wait-ForExit
 exit 0
