@@ -120,6 +120,15 @@ class App:
         self.status_text = tk.StringVar(value="Idle")
         self.audio_level = tk.DoubleVar(value=0.0)
         self.position_text = tk.StringVar(value="00:00 / 00:00")
+        # Big-status-banner state (UI-side, derived from controller status).
+        self.banner_text = tk.StringVar(value="● IDLE")
+        self.banner_detail = tk.StringVar(value="Click ▶ Start to begin streaming.")
+        # Audio progress (0..100) + countdown ("12:34 remaining" / "Looping").
+        self.audio_progress = tk.DoubleVar(value=0.0)
+        self.time_remaining = tk.StringVar(value="—")
+        # When True the UI is mid-transition (start/stop) and ALL playback
+        # buttons are disabled to avoid double-clicks freezing the UI.
+        self._busy: bool = False
 
         # Cache for PhotoImage thumbnails so they're not garbage-collected.
         self._preview_cache: dict[str, tk.PhotoImage] = {}
@@ -208,28 +217,73 @@ class App:
             row=0, column=2, padx=(0, 8), sticky="w"
         )
 
-        # Controls + status -----------------------------------------------
-        ctrl_frame = ttk.Frame(self.root)
-        ctrl_frame.pack(fill="x", **pad)
-        self.btn_start = ttk.Button(ctrl_frame, text="▶ Start", command=self._on_start)
-        self.btn_start.pack(side="left", padx=4)
-        self.btn_pause = ttk.Button(ctrl_frame, text="⏸ Pause", command=self._on_pause, state="disabled")
-        self.btn_pause.pack(side="left", padx=4)
-        self.btn_stop = ttk.Button(ctrl_frame, text="⏹ Stop", command=self._on_stop, state="disabled")
-        self.btn_stop.pack(side="left", padx=4)
-        ttk.Label(ctrl_frame, textvariable=self.position_text).pack(side="right", padx=8)
+        # Playback panel ---------------------------------------------------
+        # Big colored status banner so the user always knows AT A GLANCE
+        # what the simulator is doing. Plus a prominent audio progress
+        # bar with countdown so they know how long the clip will play.
+        playback_frame = ttk.LabelFrame(self.root, text="Playback")
+        playback_frame.pack(fill="x", **pad)
 
-        meter_frame = ttk.LabelFrame(self.root, text="Live audio level")
-        meter_frame.pack(fill="x", **pad)
+        # --- Banner (color-coded) ---
+        # Plain tk.Frame so we can color the background per state.
+        self.banner_frame = tk.Frame(playback_frame, bg="#e0e0e0", bd=0,
+                                     relief="flat", height=64)
+        self.banner_frame.pack(fill="x", padx=8, pady=(8, 6))
+        self.banner_frame.pack_propagate(False)
+        self.banner_label = tk.Label(
+            self.banner_frame, textvariable=self.banner_text,
+            bg="#e0e0e0", fg="#333333",
+            font=("Segoe UI", 16, "bold"), anchor="w", padx=12,
+        )
+        self.banner_label.pack(side="top", fill="x", pady=(6, 0))
+        self.banner_detail_label = tk.Label(
+            self.banner_frame, textvariable=self.banner_detail,
+            bg="#e0e0e0", fg="#555555",
+            font=("Segoe UI", 9), anchor="w", padx=12, justify="left",
+        )
+        self.banner_detail_label.pack(side="top", fill="x", pady=(0, 6))
+
+        # --- Buttons ---
+        ctrl_frame = ttk.Frame(playback_frame)
+        ctrl_frame.pack(fill="x", padx=8, pady=4)
+        self.btn_start = ttk.Button(ctrl_frame, text="▶ Start", command=self._on_start,
+                                    width=14)
+        self.btn_start.pack(side="left", padx=4)
+        self.btn_pause = ttk.Button(ctrl_frame, text="⏸ Pause", command=self._on_pause,
+                                    state="disabled", width=14)
+        self.btn_pause.pack(side="left", padx=4)
+        self.btn_stop = ttk.Button(ctrl_frame, text="⏹ Stop", command=self._on_stop,
+                                   state="disabled", width=14)
+        self.btn_stop.pack(side="left", padx=4)
+
+        # --- Audio progress bar with prominent time + countdown ---
+        prog_frame = ttk.Frame(playback_frame)
+        prog_frame.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(prog_frame, text="Audio progress:",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        bar_row = ttk.Frame(prog_frame)
+        bar_row.pack(fill="x", pady=(2, 0))
+        self.audio_progress_bar = ttk.Progressbar(
+            bar_row, orient="horizontal", mode="determinate",
+            maximum=100.0, variable=self.audio_progress,
+        )
+        self.audio_progress_bar.pack(side="left", fill="x", expand=True)
+        # Time text right of the bar (monospace so it doesn't wobble).
+        self.position_label = ttk.Label(bar_row, textvariable=self.position_text,
+                                        font=("Consolas", 10), width=14, anchor="e")
+        self.position_label.pack(side="right", padx=(8, 0))
+        self.remaining_label = ttk.Label(prog_frame, textvariable=self.time_remaining,
+                                         font=("Segoe UI", 9), foreground="#555555")
+        self.remaining_label.pack(anchor="e", pady=(2, 0))
+
+        # --- Live audio level (collapsed inside the same panel for cohesion) ---
+        ttk.Label(playback_frame, text="Live audio level:",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=8, pady=(8, 0))
         self.level_bar = ttk.Progressbar(
-            meter_frame, orient="horizontal", mode="determinate",
+            playback_frame, orient="horizontal", mode="determinate",
             maximum=100.0, variable=self.audio_level,
         )
-        self.level_bar.pack(fill="x", padx=8, pady=8)
-
-        ttk.Label(self.root, textvariable=self.status_text, foreground="navy").pack(
-            anchor="w", padx=12, pady=(0, 4)
-        )
+        self.level_bar.pack(fill="x", padx=8, pady=(2, 8))
 
         # Log pane ---------------------------------------------------------
         log_frame = ttk.LabelFrame(self.root, text="Log")
@@ -519,55 +573,144 @@ class App:
     # ------------------------------------------------------------------
     # Controls
     # ------------------------------------------------------------------
+    def _set_busy(self, busy: bool, label: str = "") -> None:
+        self._busy = busy
+        if busy:
+            self.btn_start.configure(state="disabled")
+            self.btn_pause.configure(state="disabled")
+            self.btn_stop.configure(state="disabled")
+            if label:
+                self._set_banner("starting", label, "Please wait — audio + virtual devices are coming online.")
+
+    def _set_banner(self, kind: str, text: str, detail: str = "") -> None:
+        # Five visual states; colors hand-picked to be calm but unambiguous.
+        palette = {
+            "idle":     ("● IDLE",        "#e0e0e0", "#333333", "#555555"),
+            "starting": ("⏳ STARTING…",  "#fff4cc", "#7a5a00", "#7a5a00"),
+            "running":  ("● STREAMING",  "#d4f4d4", "#0a6f10", "#0a6f10"),
+            "paused":   ("⏸ PAUSED",     "#fde7b1", "#8a5a00", "#8a5a00"),
+            "stopping": ("⏳ STOPPING…",  "#fff4cc", "#7a5a00", "#7a5a00"),
+            "error":    ("✖ ERROR",      "#fadbd8", "#922b21", "#922b21"),
+        }
+        prefix, bg, fg, fg_detail = palette.get(kind, palette["idle"])
+        # If caller passed a custom text use it raw; otherwise prepend prefix.
+        if not text:
+            text = prefix
+        elif not text.startswith(prefix.split(" ", 1)[0]):
+            text = f"{prefix}   {text}"
+        self.banner_text.set(text)
+        self.banner_detail.set(detail)
+        self.banner_frame.configure(bg=bg)
+        self.banner_label.configure(bg=bg, fg=fg)
+        self.banner_detail_label.configure(bg=bg, fg=fg_detail)
+
     def _on_start(self) -> None:
+        if self._busy:
+            return
         audio = self.audio_path.get().strip()
         image = self.image_path.get().strip()
         if not audio or not Path(audio).is_file():
             self._append_log(f"ERROR: audio file not found: {audio!r}")
+            self._set_banner("error", "", f"Audio file not found: {audio or '(empty)'}")
             return
         if not image or not Path(image).is_file():
             self._append_log(f"ERROR: image file not found: {image!r}")
+            self._set_banner("error", "", f"Image file not found: {image or '(empty)'}")
             return
 
-        try:
-            self.controller = SimulatorController.from_paths(
-                audio_path=audio,
-                image_path=image,
-                loop=self.loop_var.get(),
-                fps=int(self.fps_var.get()),
-                width=DEFAULT_VIDEO_WIDTH,
-                height=DEFAULT_VIDEO_HEIGHT,
-            )
-            self.controller.add_listener(self._on_status)
-            self.controller.start()
-        except Exception as exc:
-            self._append_log(f"ERROR: {exc}")
-            self.controller = None
-            return
+        # Heavy lifting (file load + virtual-device probe) MUST happen off
+        # the UI thread, otherwise Tk freezes for 1-3 seconds and the
+        # window goes "(Not responding)" - exactly what the user reported.
+        self._set_busy(True, label=f"Loading {Path(audio).name}…")
+        self._append_log(f"INFO   starting: audio={Path(audio).name} image={Path(image).name}")
 
+        loop = self.loop_var.get()
+        fps = int(self.fps_var.get())
+
+        def worker():
+            try:
+                controller = SimulatorController.from_paths(
+                    audio_path=audio,
+                    image_path=image,
+                    loop=loop,
+                    fps=fps,
+                    width=DEFAULT_VIDEO_WIDTH,
+                    height=DEFAULT_VIDEO_HEIGHT,
+                )
+                controller.add_listener(self._on_status)
+                controller.start()
+            except Exception as exc:
+                log.exception("start failed")
+                self.root.after(0, self._on_start_failed, exc)
+                return
+            self.root.after(0, self._on_start_succeeded, controller, Path(audio).name)
+
+        threading.Thread(target=worker, daemon=True, name="ts-start").start()
+
+    def _on_start_succeeded(self, controller: SimulatorController, audio_name: str) -> None:
+        self.controller = controller
+        self._busy = False
         self.btn_start.configure(state="disabled")
         self.btn_pause.configure(state="normal", text="⏸ Pause")
         self.btn_stop.configure(state="normal")
+        loop_hint = "looping" if self.loop_var.get() else "single play"
+        self._set_banner("running", "", f"Now streaming: {audio_name}  ·  {loop_hint}")
+        self._append_log(f"OK     streaming started ({audio_name})")
+
+    def _on_start_failed(self, exc: Exception) -> None:
+        self.controller = None
+        self._busy = False
+        self.btn_start.configure(state="normal")
+        self.btn_pause.configure(state="disabled", text="⏸ Pause")
+        self.btn_stop.configure(state="disabled")
+        msg = str(exc)
+        # Trim the typical multi-line traceback noise to a single useful line.
+        first_line = msg.strip().split("\n")[0][:200]
+        self._set_banner("error", "", f"Could not start: {first_line}")
+        self._append_log(f"ERROR  start failed: {first_line}")
 
     def _on_pause(self) -> None:
-        if self.controller is None:
+        if self.controller is None or self._busy:
             return
         status = self.controller.get_status()
         if status.state == State.RUNNING:
             self.controller.pause()
             self.btn_pause.configure(text="▶ Resume")
+            self._set_banner("paused", "", "Paused — Teams is still receiving silence + the avatar frame.")
         elif status.state == State.PAUSED:
             self.controller.resume()
             self.btn_pause.configure(text="⏸ Pause")
+            audio_name = Path(self.audio_path.get()).name
+            self._set_banner("running", "", f"Resumed: {audio_name}")
 
     def _on_stop(self) -> None:
-        if self.controller is None:
+        if self.controller is None or self._busy:
             return
-        self.controller.stop()
+        self._set_busy(True, label="Stopping…")
+        self._set_banner("stopping", "", "Closing virtual mic and camera…")
+        controller = self.controller
+
+        def worker():
+            try:
+                controller.stop()
+            except Exception:
+                log.exception("stop failed")
+            self.root.after(0, self._on_stop_done)
+
+        threading.Thread(target=worker, daemon=True, name="ts-stop").start()
+
+    def _on_stop_done(self) -> None:
         self.controller = None
+        self._busy = False
         self.btn_start.configure(state="normal")
         self.btn_pause.configure(state="disabled", text="⏸ Pause")
         self.btn_stop.configure(state="disabled")
+        self.audio_progress.set(0.0)
+        self.audio_level.set(0.0)
+        self.position_text.set("00:00 / 00:00")
+        self.time_remaining.set("—")
+        self._set_banner("idle", "", "Click ▶ Start to begin streaming.")
+        self._append_log("OK     stopped")
 
     # ------------------------------------------------------------------
     # Periodic refresh
@@ -576,11 +719,23 @@ class App:
         self.root.after(0, self._apply_status, status)
 
     def _apply_status(self, status: Status) -> None:
-        self.status_text.set(f"{status.state.value.upper()}: {status.message}")
-        if status.state in (State.IDLE, State.ERROR):
-            self.btn_start.configure(state="normal")
-            self.btn_pause.configure(state="disabled", text="⏸ Pause")
-            self.btn_stop.configure(state="disabled")
+        # Be defensive: a single bad listener payload must not kill the UI.
+        try:
+            self.status_text.set(f"{status.state.value.upper()}: {status.message}")
+            if status.state == State.ERROR:
+                # Controller flipped to ERROR (e.g. audio device died mid-stream).
+                self.controller = None
+                self._busy = False
+                self.btn_start.configure(state="normal")
+                self.btn_pause.configure(state="disabled", text="⏸ Pause")
+                self.btn_stop.configure(state="disabled")
+                self._set_banner("error", "", status.message or "Stream ended unexpectedly.")
+            elif status.state == State.IDLE and not self._busy:
+                self.btn_start.configure(state="normal")
+                self.btn_pause.configure(state="disabled", text="⏸ Pause")
+                self.btn_stop.configure(state="disabled")
+        except Exception:
+            log.exception("apply_status failed")
 
     def _poll(self) -> None:
         # Drain the log queue.
@@ -591,26 +746,55 @@ class App:
                 break
             self._append_log(line)
 
-        # Live status (level meter + position).
-        if self.controller is not None:
-            status = self.controller.get_status()
-            self.audio_level.set(min(100.0, status.audio_level * 100.0 * 2.0))
-            self.position_text.set(
-                f"{_fmt_time(status.audio_position_seconds)} / "
-                f"{_fmt_time(status.audio_duration_seconds)}"
-            )
-        else:
+        # Live status (level meter + position + countdown).
+        if self.controller is not None and not self._busy:
+            try:
+                status = self.controller.get_status()
+            except Exception:
+                log.exception("get_status failed")
+                status = None
+            if status is not None:
+                self.audio_level.set(min(100.0, status.audio_level * 100.0 * 2.0))
+                pos = max(0.0, status.audio_position_seconds)
+                dur = max(0.0, status.audio_duration_seconds)
+                self.position_text.set(f"{_fmt_time(pos)} / {_fmt_time(dur)}")
+                if dur > 0.0:
+                    pct = min(100.0, (pos / dur) * 100.0)
+                    self.audio_progress.set(pct)
+                    remaining = max(0.0, dur - pos)
+                    if self.loop_var.get():
+                        self.time_remaining.set(
+                            f"🔁 Looping  ·  {_fmt_time(remaining)} until next loop"
+                        )
+                    else:
+                        self.time_remaining.set(f"⏳ {_fmt_time(remaining)} remaining")
+                else:
+                    self.audio_progress.set(0.0)
+                    self.time_remaining.set("—")
+        elif not self._busy:
             self.audio_level.set(0.0)
-            self.position_text.set("00:00 / 00:00")
+            # leave audio_progress / position / remaining where stop() left them
 
         self.root.after(self.POLL_MS, self._poll)
 
     def _on_close(self) -> None:
+        # Don't block the UI thread waiting for stop() to finish — give it
+        # a worker + a short grace period, then destroy regardless.
         if self.controller is not None:
-            try:
-                self.controller.stop()
-            except Exception:
-                log.exception("stop on close failed")
+            ctrl = self.controller
+            self.controller = None
+            done = threading.Event()
+
+            def stopper():
+                try:
+                    ctrl.stop()
+                except Exception:
+                    log.exception("stop on close failed")
+                finally:
+                    done.set()
+
+            threading.Thread(target=stopper, daemon=True, name="ts-close").start()
+            done.wait(timeout=3.0)
         self.root.destroy()
 
 

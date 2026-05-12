@@ -211,10 +211,18 @@ powershell -ExecutionPolicy Bypass -File .\setup\verify.ps1
   ffmpeg is installed) and any `.png`/`.jpg`/`.bmp`. The bundled
   `samples/demo_audio.wav` and `samples/demo_avatar.png` are pre-filled.
 * **Options** — *Loop audio* (default on) and *FPS* spinbox.
-* **▶ Start / ⏸ Pause / ⏹ Stop** — start streams audio + video atomically.
-* **Live audio level** progress bar — the same RMS that drives the
-  in-camera waveform.
-* **Log** — INFO/ERROR messages from the controller.
+* **Playback** panel — at-a-glance feedback so you always know what the
+  app is doing:
+  * **Big colored status banner** — gray ● IDLE, yellow ⏳ STARTING,
+    green ● STREAMING, amber ⏸ PAUSED, red ✖ ERROR.
+  * **▶ Start / ⏸ Pause / ⏹ Stop** — Start runs in a background thread,
+    so the window never freezes during the 1-3 s device hand-shake.
+  * **Audio progress bar** with `mm:ss / mm:ss` and a prominent
+    `⏳ N:NN remaining` countdown (or `🔁 Looping · N:NN until next loop`
+    when *Loop audio* is on).
+  * **Live audio level** — the same RMS that drives the in-camera waveform.
+* **Log** — INFO/ERROR messages from the controller. Full transcript is
+  also written to `Desktop\TeamsSimulatorLogs\ui-*.log`.
 
 ### CLI / scripted
 
